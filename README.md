@@ -1,36 +1,65 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# House Hunting Inspiration Board
 
-## Getting Started
+A vision-board / Pinterest-style app for tracking house-hunting inspiration —
+images, links, notes — organized into user-defined categories (houses,
+kitchens, backyards, pools…). Real-time collaborative so a couple can hunt
+together. See [`PRD.md`](./PRD.md) for the full product spec.
 
-First, run the development server:
+## Stack
+
+- Next.js 16 (App Router) + React 19 + TypeScript + Tailwind v4
+- Supabase — Postgres, Auth, Storage, Realtime
+- Cloudflare Workers (via `@opennextjs/cloudflare`) for hosting
+- Vitest for unit tests
+
+## Getting started
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
+# Install
+pnpm install
+
+# Configure env
+cp .env.local.example .env.local
+# fill in NEXT_PUBLIC_SUPABASE_URL, NEXT_PUBLIC_SUPABASE_ANON_KEY,
+# SUPABASE_SERVICE_ROLE_KEY, GEMINI_API_KEY, FLUX_API_KEY
+
+# Bring up the local Supabase stack (requires Docker)
+pnpm exec supabase start
+pnpm exec supabase db reset      # apply migrations
+
+# Run the app
 pnpm dev
-# or
-bun dev
+# → http://localhost:3000
+
+# Tests
+pnpm test
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+## Cloudflare deploy
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+# Local Workers preview (mirrors prod runtime)
+pnpm preview
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+# Deploy
+pnpm deploy
+```
 
-## Learn More
+Deploy prerequisites:
 
-To learn more about Next.js, take a look at the following resources:
+1. `wrangler login`
+2. Create the OpenNext cache R2 bucket:
+   `wrangler r2 bucket create house-hunting-board-opennext-cache`
+3. Set secrets:
+   ```bash
+   wrangler secret put SUPABASE_SERVICE_ROLE_KEY
+   wrangler secret put GEMINI_API_KEY
+   wrangler secret put FLUX_API_KEY
+   ```
+4. Public Supabase config (`NEXT_PUBLIC_*`) lives in `wrangler.jsonc` under
+   `vars` — set per-environment as needed.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Project layout
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+See [`AGENTS.md`](./AGENTS.md) for full conventions, file layout, and
+contributor guide.
