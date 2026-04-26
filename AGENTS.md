@@ -24,16 +24,56 @@ pnpm dev              # Next.js dev server (turbopack, http://localhost:3000)
 pnpm test             # Vitest, single run
 pnpm test:watch       # Vitest in watch mode
 pnpm lint             # ESLint
+pnpm build            # Next.js production build
 pnpm cf:build         # OpenNext: build for Cloudflare Workers
 pnpm preview          # Build + run locally on Workers via wrangler
 pnpm deploy           # Build + deploy to Cloudflare
 pnpm cf-typegen       # Generate CloudflareEnv types from wrangler.jsonc
 
-# Local Supabase (Postgres + Auth + Storage + Realtime in Docker)
+# Run a single test file or a single test by name
+pnpm test path/to/file.test.ts
+pnpm test -t "partial test name"
+
+# Local Supabase (Postgres + Auth + Storage + Realtime in Docker; needs Docker running)
 pnpm exec supabase start
 pnpm exec supabase db reset      # re-apply all migrations from scratch
 pnpm exec supabase migration new <name>
+pnpm exec supabase stop
 ```
+
+## Architecture (big picture)
+
+Three runtimes, one Postgres:
+
+1. **Next.js (App Router) on Cloudflare Workers** — the user-facing app.
+   RSCs read directly from Supabase via the SSR client; mutations go
+   through Server Actions or `src/app/api/*` route handlers.
+2. **Supabase Postgres** — the source of truth and the **authorization
+   boundary**. Every table that holds board content has RLS gated on
+   `is_board_member(board_id)` / `has_board_role(board_id, role)` (defined
+   in `supabase/migrations/0001_init.sql`). Never re-implement these checks
+   in app code; let the DB reject.
+3. **Standalone Cloudflare Workers under `workers/`** (future) — async jobs:
+   listing scrapers, image-copy from Redfin/Zillow into Supabase Storage,
+   LLM feature-signal extraction, AI image edits. Triggered by HTTP or
+   Cloudflare Queues; the Next app enqueues, then receives push updates
+   over the board's Supabase Realtime channel (`boards:{board_id}`).
+
+Two cross-cutting code patterns to follow:
+
+- **Polymorphic artifacts.** A single `artifacts` row can be an image,
+  link, text, or note (`kind` column) with kind-specific extras living in
+  the `metadata` jsonb. Add new kinds by extending the enum + a discriminated
+  union in TS, not by sharding into new tables.
+- **AI image edits behind an interface.** `ai_edits` records the lineage
+  (parent → output, prompt, model, cost). The PRD calls for model
+  swappability (Gemini 2.5 Flash Image as primary, FLUX Kontext fallback);
+  put a single `ImageEditor` interface in `src/lib/ai/` and dispatch by
+  model so the table column drives runtime selection.
+
+Image storage is currently Supabase Storage (`artifacts/` bucket, signed
+URLs). The wrangler config reserves an R2 binding for a possible later
+swap; keep the storage layer abstracted so that swap is a one-file change.
 
 ## Conventions
 
