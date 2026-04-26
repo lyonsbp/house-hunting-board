@@ -84,20 +84,17 @@ User pastes a listing URL → backend extracts metadata + images → user picks
 which images to keep → picked images are copied to Supabase Storage so they
 outlive the listing.
 
-Two-tier strategy:
+**Scraper-only at launch.** A Cloudflare Worker fetches the page;
+static-HTML pages parse with `cheerio`, JS-rendered pages route to a
+headless service (Browserless or self-hosted Playwright). Jobs queue via
+Cloudflare Queues; the user sees an "importing…" state and gets a Realtime
+push when ready.
 
-1. **API tier (preferred where licensed)**
-   Zillow's public API is heavily gated; realistic options are partner APIs
-   (Bridge Interactive, RapidAPI listings vendors, RentSpree, etc.). We'll
-   spike cost/access during M2.
-2. **Scraper tier (fallback, async)**
-   Cloudflare Worker fetches the page. Static-HTML pages parse with
-   `cheerio`; JS-rendered pages route to a headless service (Browserless or
-   self-hosted Playwright). Job is queued via Cloudflare Queues; the user
-   sees an "importing…" state and gets a Realtime push when ready.
-
-Build both. The API tier is faster and cleaner when licensed; the scraper
-is the durable fallback (and the only option for delisted properties).
+Licensed API tiers (Bridge Interactive, RapidAPI listings vendors, etc.)
+are deferred — access requires MLS sponsorship or unproven third-party
+vendors, and the scraper is the only viable path for delisted properties
+anyway (which is the durable-capture core of the product). Revisit once we
+know which fields we actually depend on.
 
 ### 5.3 AI Image Editing & AI Remix (M3)
 
@@ -124,6 +121,14 @@ Two use cases:
 fallback for harder structural edits. Abstract behind an `ImageEditor`
 interface so the model is swappable per-request and we can A/B per use case.
 
+#### Cost guardrails
+
+Per-user cap of **10 AI image invocations per rolling 7 days** (an Edit
+counts as 1; a Remix of N variants counts as N). Counter derived from
+`ai_edits` rows by `created_by` + `created_at`. The editor UI shows
+remaining quota for the week and disables submit at zero. No dollar-based
+billing yet — invocation count is a simpler proxy and easier to explain.
+
 ### 5.4 Price Analytics (post-MVP, schema-prepared at MVP)
 
 Goal: answer questions like *"how much does X feature cost on average?"* —
@@ -136,6 +141,11 @@ features…) or simpler group-by/cohort comparisons in the analytics UI.
 
 We capture `properties` + `feature_signals` rows starting at MVP so the
 dataset accumulates well before the analytics UI ships.
+
+Image-similarity search via pgvector is deferred until M4: the per-image
+LLM feature-extraction pass is already iterating every image then and can
+piggyback embeddings cheaply. Backfilling over the accumulated corpus at
+that point is acceptable.
 
 ## 6. Architecture
 
@@ -161,6 +171,11 @@ Cloudflare Workers (cron + queue consumers)
   storage layer is abstracted in the app).
 - **Realtime**: one channel per board (`boards:{board_id}`).
 - **Hosting**: Cloudflare Workers via `@opennextjs/cloudflare` (no Vercel).
+- **Layout target**: desktop-first for v1 — drag-drop categorization, the
+  scraped-listing image picker, and the AI editor canvas are all
+  desktop-shaped. Mobile gets a read + quick-add path (paste link, snap
+  photo, comment) so couples browsing Zillow on phones can capture; full
+  board editing happens on desktop.
 
 ## 7. Privacy & Legal
 
@@ -171,23 +186,17 @@ Cloudflare Workers (cron + queue consumers)
   provenance.
 - Cross-board analytics queries operate on `properties` / `feature_signals`
   only — never expose user-specific board content across users.
+- `feature_signals` rows must reference **only** `property_id` — never
+  `board_id` or `artifact_id` — so there is no join path from a globally-
+  readable analytics row back to a user or board.
 
-## 8. Open Questions
-
-- Which Zillow/Redfin/MLS API tier (if any) to license at launch?
-- AI cost guardrails: per-user monthly budget cap? show running cost in UI?
-- Does the price-analytics dataset need to be cross-user (privacy review)?
-  Initial answer: yes, but only the property/feature data, never artifacts.
-- Mobile-first vs desktop-first layout for v1 (board feels native to both).
-- Image-similarity search via pgvector — worth adding now, or wait?
-
-## 9. Milestones
+## 8. Milestones
 
 | | Scope |
 |---|---|
 | **M0** | Scaffold (this commit): Next.js + Supabase + Cloudflare + Vitest, schema in place |
 | **M1** | Core board: categories + artifacts + Realtime + invites |
-| **M2** | Listing import: URL paste → image picker (API tier + scraper fallback) |
+| **M2** | Listing import: URL paste → image picker (scraper) |
 | **M3** | AI image edit + Remix |
 | **M4** | Feature-signal extraction (background worker) |
 | **M5** | Price analytics UI |
