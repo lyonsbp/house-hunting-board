@@ -76,7 +76,7 @@ describe("previewListing", () => {
     if (out.status === "ready") {
       expect(out.preview.images.length).toBe(3);
       expect(out.preview.property.source).toBe("redfin");
-      expect(out.preview.property.address).toBe("123 Maple St");
+      expect(out.preview.property.address).toBe("2661 Crestview Dr");
     }
   });
 

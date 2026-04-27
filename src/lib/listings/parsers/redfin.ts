@@ -57,40 +57,81 @@ function parseEmbeddedReactState(
   $: cheerio.CheerioAPI,
   sourceUrl: string,
 ): ListingPreview | null {
+  // Redfin pages contain at least three top-level assignments inside the
+  // same `<script>`:
+  //   root.__reactServerState || (root.__reactServerState = {});
+  //   root.__reactServerState.InitialContext = { … listing payload … };
+  //   root.__reactServerState.Config       = { … };
+  //
+  // The `||` line nests an empty `{}` that we don't want to land on. Anchor
+  // the slice to a known assignment site, with `InitialContext` first since
+  // that's where the photo array lives.
+  const ANCHORS = [
+    "InitialContext = ",
+    "InitialContext=",
+    "ClassicProvider = ",
+    "Config = ",
+  ];
   let blob: unknown = null;
   $("script").each((_, el) => {
     if (blob) return;
     const text = $(el).html();
     if (!text) return;
     if (!text.includes("__reactServerState")) return;
-    const start = text.indexOf("{");
-    if (start < 0) return;
-    const candidate = sliceBalancedJson(text, start);
-    if (!candidate) return;
-    try {
-      blob = JSON.parse(candidate);
-    } catch {
-      // ignore — we'll fall through to JSON-LD
+    for (const anchor of ANCHORS) {
+      const at = text.indexOf(anchor);
+      if (at < 0) continue;
+      const start = text.indexOf("{", at + anchor.length);
+      if (start < 0) continue;
+      const candidate = sliceBalancedJson(text, start);
+      if (!candidate) continue;
+      try {
+        blob = JSON.parse(candidate);
+        if (blob) break;
+      } catch {
+        // try the next anchor
+      }
     }
   });
   if (!blob) return null;
 
   // Redfin nests further JSON-as-strings inside; collect every JSON-parseable
-  // string and every nested object so we can pick whichever has photos +
-  // address fields.
+  // string and every nested object. We may pull photos from one node and
+  // address fields from a different one; both are merged into the preview.
   const nodes = collectObjectsAndParseableStrings(blob);
 
-  let imageUrls: string[] = [];
-  let propertyNode: Record<string, unknown> | null = null;
-
+  // Aggregate photo URLs from every `mediaBrowserInfo.photos` array we see.
+  // Multiple arrays exist on a listing page (the listing itself plus nearby
+  // POIs sourced from Foursquare etc.) — filter to Redfin's CDN so we don't
+  // import a coffee shop's photos.
+  const allUrls: string[] = [];
   for (const node of nodes) {
-    if (imageUrls.length === 0) {
-      imageUrls = readRedfinImages(node);
+    for (const u of readRedfinImages(node)) allUrls.push(u);
+  }
+  const imageUrls = allUrls.filter((u) =>
+    /^https?:\/\/[a-z0-9-]*\.?cdn-redfin\.com\//i.test(u),
+  );
+
+  // Property node selection — prefer a node that has the `addressSectionInfo`
+  // sub-object (the canonical shape on modern Redfin pages); fall back to a
+  // node that itself looks like a property record.
+  let propertyNode: Record<string, unknown> | null = null;
+  for (const node of nodes) {
+    if (
+      typeof node.addressSectionInfo === "object" &&
+      node.addressSectionInfo
+    ) {
+      propertyNode = node.addressSectionInfo as Record<string, unknown>;
+      break;
     }
-    if (!propertyNode && hasRedfinPropertyShape(node)) {
-      propertyNode = node;
+  }
+  if (!propertyNode) {
+    for (const node of nodes) {
+      if (hasRedfinPropertyShape(node)) {
+        propertyNode = node;
+        break;
+      }
     }
-    if (imageUrls.length > 0 && propertyNode) break;
   }
 
   if (imageUrls.length === 0) return null;
@@ -143,7 +184,12 @@ function sliceBalancedJson(text: string, start: number): string | null {
   return null;
 }
 
-/** Walk an arbitrary value, returning every object encountered (incl. those reached by JSON.parsing string leaves). */
+/**
+ * Walk an arbitrary value, returning every object encountered (incl. those
+ * reached by JSON.parsing string leaves). Handles Redfin's API anti-hijacking
+ * prefix `{}&&{...}` (and the simpler `&&{...}`) by stripping it before
+ * attempting `JSON.parse`.
+ */
 function collectObjectsAndParseableStrings(root: unknown): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
   const stack: unknown[] = [root];
@@ -152,14 +198,12 @@ function collectObjectsAndParseableStrings(root: unknown): Record<string, unknow
     const cur = stack.pop();
     if (cur === null || cur === undefined) continue;
     if (typeof cur === "string") {
-      // Only attempt JSON.parse when it looks like a JSON object/array — this
-      // is much faster than try/catch on every leaf string.
-      const t = cur.trim();
-      if (t.startsWith("{") || t.startsWith("[")) {
+      const candidate = stripRedfinPrefix(cur.trim());
+      if (candidate.startsWith("{") || candidate.startsWith("[")) {
         try {
-          stack.push(JSON.parse(cur));
+          stack.push(JSON.parse(candidate));
         } catch {
-          // ignore
+          // ignore — not all string leaves are JSON
         }
       }
       continue;
@@ -178,17 +222,71 @@ function collectObjectsAndParseableStrings(root: unknown): Record<string, unknow
   return out;
 }
 
-const REDFIN_PHOTO_KEYS = new Set([
-  "photoUrls",
-  "photos",
-  "photoSet",
-  "fullPhotoUrl",
-]);
+/**
+ * Redfin's stingray API responses are wrapped to defeat naive JSON hijacking:
+ * the body looks like `{}&&{"data":...}` or `&&{"data":...}`. Strip whichever
+ * prefix is present before parsing.
+ */
+function stripRedfinPrefix(s: string): string {
+  if (s.startsWith("{}&&")) return s.slice(4);
+  if (s.startsWith("&&")) return s.slice(2);
+  return s;
+}
+
+/**
+ * Pick the best URL out of a Redfin `photoUrls` object. Carousel entries on
+ * a listing page are shaped like:
+ *   { fullScreenPhotoUrl, nonFullScreenPhotoUrl, nonFullScreenPhotoUrlCompressed,
+ *     lightboxListUrl, thumbnailUrl }
+ * Prefer the full-screen url so the imported asset is high-resolution.
+ */
+function pickRedfinPhotoUrl(photoUrls: Record<string, unknown>): string | null {
+  const order = [
+    "fullScreenPhotoUrl",
+    "nonFullScreenPhotoUrl",
+    "lightboxListUrl",
+    "nonFullScreenPhotoUrlCompressed",
+    "thumbnailUrl",
+    "fullPhotoUrl",
+    "url",
+    "src",
+  ];
+  for (const k of order) {
+    const v = photoUrls[k];
+    if (typeof v === "string" && /^https?:\/\//.test(v)) return v;
+  }
+  return null;
+}
 
 function readRedfinImages(node: Record<string, unknown>): string[] {
   const urls: string[] = [];
+  // Modern Redfin: mediaBrowserInfo.photos[] — preferred path.
+  const mbi = node.mediaBrowserInfo;
+  if (mbi && typeof mbi === "object") {
+    const photos = (mbi as Record<string, unknown>).photos;
+    if (Array.isArray(photos)) {
+      for (const photo of photos) {
+        if (!photo || typeof photo !== "object") continue;
+        const photoUrls = (photo as Record<string, unknown>).photoUrls;
+        if (photoUrls && typeof photoUrls === "object") {
+          const u = pickRedfinPhotoUrl(photoUrls as Record<string, unknown>);
+          if (u) urls.push(u);
+        }
+      }
+    }
+  }
+  if (urls.length > 0) return urls;
+
+  // Legacy / alternate shapes: top-level photo arrays.
+  const LEGACY_KEYS = new Set([
+    "photoUrls",
+    "photos",
+    "photoSet",
+    "fullPhotoUrl",
+    "mediaBrowserInfoBySourceId",
+  ]);
   for (const [k, v] of Object.entries(node)) {
-    if (!REDFIN_PHOTO_KEYS.has(k) && k !== "mediaBrowserInfoBySourceId") continue;
+    if (!LEGACY_KEYS.has(k)) continue;
     if (typeof v === "string" && /^https?:\/\//.test(v)) {
       urls.push(v);
       continue;
@@ -198,13 +296,23 @@ function readRedfinImages(node: Record<string, unknown>): string[] {
         if (typeof item === "string" && /^https?:\/\//.test(item)) {
           urls.push(item);
         } else if (item && typeof item === "object") {
+          const obj = item as Record<string, unknown>;
+          const inner = obj.photoUrls;
+          if (inner && typeof inner === "object") {
+            const u = pickRedfinPhotoUrl(inner as Record<string, unknown>);
+            if (u) {
+              urls.push(u);
+              continue;
+            }
+          }
           const u =
-            (item as Record<string, unknown>).fullPhotoUrl ??
-            (item as Record<string, unknown>).url ??
-            (item as Record<string, unknown>).src ??
-            (item as Record<string, unknown>).large ??
-            (item as Record<string, unknown>).bigPhoto;
-          if (typeof u === "string") urls.push(u);
+            (typeof obj.fullPhotoUrl === "string" && obj.fullPhotoUrl) ||
+            (typeof obj.url === "string" && obj.url) ||
+            (typeof obj.src === "string" && obj.src) ||
+            (typeof obj.large === "string" && obj.large) ||
+            (typeof obj.bigPhoto === "string" && obj.bigPhoto) ||
+            null;
+          if (u) urls.push(u);
         }
       }
     }
@@ -214,6 +322,7 @@ function readRedfinImages(node: Record<string, unknown>): string[] {
 
 function hasRedfinPropertyShape(node: Record<string, unknown>): boolean {
   return (
+    "addressSectionInfo" in node ||
     "streetAddress" in node ||
     "streetLine" in node ||
     ("priceInfo" in node && typeof node.priceInfo === "object") ||
@@ -230,14 +339,42 @@ function buildPropertyFromRedfinNode(
     typeof node.priceInfo === "object" && node.priceInfo
       ? (node.priceInfo as Record<string, unknown>)
       : null;
-  const address = typeof node.streetAddress === "object" && node.streetAddress
-    ? (node.streetAddress as Record<string, unknown>)
-    : null;
+  const latestPriceInfo =
+    typeof node.latestPriceInfo === "object" && node.latestPriceInfo
+      ? (node.latestPriceInfo as Record<string, unknown>)
+      : null;
+  const address =
+    typeof node.streetAddress === "object" && node.streetAddress
+      ? (node.streetAddress as Record<string, unknown>)
+      : null;
+  const sqFtField =
+    typeof node.sqFt === "object" && node.sqFt
+      ? (node.sqFt as Record<string, unknown>)
+      : null;
+  const status =
+    typeof node.status === "object" && node.status
+      ? (node.status as Record<string, unknown>)
+      : null;
 
   const street =
     asString(node.streetLine) ??
+    asString(address?.assembledAddress) ??
     asString(address?.streetLine) ??
-    asString(node.streetAddress as unknown);
+    (typeof node.streetAddress === "string"
+      ? asString(node.streetAddress as unknown)
+      : undefined);
+
+  // Some addressSectionInfo payloads only carry sold price (under priceInfo).
+  // Use status to decide whether the headline number is list vs sold.
+  const headlineAmount =
+    asNumber(priceInfo?.amount) ?? asNumber(latestPriceInfo?.amount);
+  const statusToken =
+    asString(status?.longerDefinitionToken) ??
+    asString(status?.displayValue) ??
+    asString(node.status);
+  const isSold = statusToken
+    ? /sold|closed/i.test(statusToken)
+    : asString(priceInfo?.label)?.toLowerCase().includes("sold");
 
   return {
     source: SOURCE,
@@ -247,17 +384,20 @@ function buildPropertyFromRedfinNode(
     city: asString(node.city) ?? asString(address?.city),
     state: asString(node.state) ?? asString(address?.state),
     zip: asString(node.zip) ?? asString(address?.zip),
-    listPrice:
-      asNumber(priceInfo?.amount) ??
-      asNumber(node.price) ??
-      asNumber(node.listPrice),
-    soldPrice: asNumber(node.soldPrice),
+    listPrice: isSold
+      ? undefined
+      : headlineAmount ?? asNumber(node.price) ?? asNumber(node.listPrice),
+    soldPrice: isSold ? headlineAmount : asNumber(node.soldPrice),
     bedrooms: asInt(node.beds) ?? asInt(node.numBedrooms),
     bathrooms: asNumber(node.baths) ?? asNumber(node.numBathrooms),
-    sqft: asInt(node.sqFt) ?? asInt(node.sqft) ?? asInt(node.livingArea),
+    sqft:
+      asInt(sqFtField?.value) ??
+      asInt(node.sqFt) ??
+      asInt(node.sqft) ??
+      asInt(node.livingArea),
     lotSqft: asInt(node.lotSize) ?? asInt(node.lotSqft),
     yearBuilt: asInt(node.yearBuilt),
-    status: asString(node.status) ?? asString(node.mlsStatus),
+    status: statusToken,
     raw,
   };
 }

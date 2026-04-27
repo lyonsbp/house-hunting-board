@@ -13,28 +13,34 @@ function load(name: string): string {
 const SOURCE_URL = "https://www.redfin.com/WA/Seattle/123-Maple-St-98101/home/12345";
 
 describe("parseRedfin", () => {
-  it("extracts the embedded React state pathway when available", () => {
+  it("extracts the modern Redfin shape (mediaBrowserInfo.photos + addressSectionInfo)", () => {
     const out = parseRedfin(load("redfin-embedded.html"), SOURCE_URL);
 
     expect(out.pathway).toBe("embedded-json");
     expect(out.partial).toBe(false);
+    // Three carousel photos in the fixture, all from Redfin's CDN.
     expect(out.images.length).toBe(3);
-    expect(out.images[0].url).toBe("https://ssl.cdn-redfin.com/photo/1.jpg");
+    expect(out.images[0].url).toBe(
+      "https://ssl.cdn-redfin.com/photo/45/bigphoto/552/PW21087552_0.jpg",
+    );
     expect(out.property).toMatchObject({
       source: "redfin",
       sourceUrl: SOURCE_URL,
-      address: "123 Maple St",
-      city: "Seattle",
-      state: "WA",
-      zip: "98101",
+      address: "2661 Crestview Dr",
+      city: "Newport Beach",
+      state: "CA",
+      zip: "92663",
       bedrooms: 3,
-      bathrooms: 2.5,
-      sqft: 1850,
-      yearBuilt: 1972,
-      listPrice: 875000,
-      sourceId: "PR-123",
-      status: "Active",
+      bathrooms: 2,
+      sqft: 1654,
+      yearBuilt: 1952,
+      // Sold listing — headline number is the sold price, not list price.
+      soldPrice: 2700000,
+      lotSqft: 4800,
     });
+    // Status flags this as sold so we don't show a stale list price.
+    expect(out.property.listPrice).toBeUndefined();
+    expect(out.property.status?.toLowerCase()).toMatch(/sold|closed/);
   });
 
   it("falls back to JSON-LD when there is no embedded React state", () => {
