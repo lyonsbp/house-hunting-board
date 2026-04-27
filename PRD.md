@@ -121,6 +121,13 @@ Two use cases:
 fallback for harder structural edits. Abstract behind an `ImageEditor`
 interface so the model is swappable per-request and we can A/B per use case.
 
+A third backend behind the same `ImageEditor` interface targets a **local
+ComfyUI server** running open-weights models (FLUX.1 Kontext [dev],
+Qwen-Image-Edit) on developer hardware. Used for prompt iteration and
+taxonomy work without burning cloud spend, and as a possible self-hosted
+tier later. The Worker reaches it via an OpenAI-compatible proxy
+(LiteLLM) so the cloud and local code paths are identical.
+
 #### Cost guardrails
 
 Per-user cap of **10 AI image invocations per rolling 7 days** (an Edit
