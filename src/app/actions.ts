@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -36,7 +35,7 @@ export async function createBoard(
   // INSERT trigger's membership row isn't visible to the RLS check — so
   // RETURNING raises a (misleading) RLS error. Without RETURNING the
   // INSERT just runs the WITH CHECK (true) policy and succeeds.
-  const id = randomUUID();
+  const id = crypto.randomUUID();
   const supabase = await createClient();
   const { error } = await supabase
     .from("boards")

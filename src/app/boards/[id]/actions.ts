@@ -1,6 +1,5 @@
 "use server";
 
-import { randomUUID } from "node:crypto";
 import * as cheerio from "cheerio";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
@@ -285,7 +284,7 @@ export async function createImageArtifact(
   }
 
   const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
-  const path = `boards/${parsed.data.boardId}/${randomUUID()}.${ext}`;
+  const path = `boards/${parsed.data.boardId}/${crypto.randomUUID()}.${ext}`;
 
   const supabase = await createClient();
   const { error: uploadError } = await supabase.storage

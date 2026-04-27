@@ -1,36 +1,45 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "main": ".open-next/worker.js",
-  "name": "house-hunting-board",
-  "compatibility_date": "2026-04-26",
-  "compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
-  "assets": {
-    "directory": ".open-next/assets",
-    "binding": "ASSETS"
-  },
-  "services": [
-    {
-      "binding": "WORKER_SELF_REFERENCE",
-      "service": "house-hunting-board"
-    }
-  ],
-  "r2_buckets": [
-    {
-      "binding": "NEXT_INC_CACHE_R2_BUCKET",
-      "bucket_name": "house-hunting-board-opennext-cache"
-    }
-  ],
-  "images": {
-    "binding": "IMAGES"
-  },
-  "vars": {
-    // Public Supabase config — set real values in `.dev.vars` for local dev
-    // and via `wrangler deploy --var` / dashboard for prod.
-    "NEXT_PUBLIC_SUPABASE_URL": "",
-    "NEXT_PUBLIC_SUPABASE_ANON_KEY": ""
-  }
-  // Secrets (do NOT commit): set with `wrangler secret put <NAME>`
-  //   SUPABASE_SERVICE_ROLE_KEY  — server-only Supabase admin key
-  //   GEMINI_API_KEY             — image edit / remix
-  //   FLUX_API_KEY               — fallback image model
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"main": ".open-next/worker.js",
+	"name": "house-hunting-board",
+	"compatibility_date": "2026-04-26",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	"assets": {
+		"directory": ".open-next/assets",
+		"binding": "ASSETS"
+	},
+	"services": [
+		{
+			"binding": "WORKER_SELF_REFERENCE",
+			"service": "house-hunting-board"
+		}
+	],
+	"r2_buckets": [
+		{
+			"binding": "NEXT_INC_CACHE_R2_BUCKET",
+			"bucket_name": "house-hunting-board-opennext-cache"
+		},
+		{
+			"bucket_name": "house-hunting-board-opennext-cache",
+			"binding": "house_hunting_board_opennext_cache"
+		}
+	],
+	"images": {
+		"binding": "IMAGES"
+	},
+	"vars": {
+		// Public Supabase config — these are publishable keys and a public URL,
+		// safe to commit. They also need to be on the shell during `pnpm cf:build`
+		// because Next.js inlines NEXT_PUBLIC_* values into the client bundle.
+		"NEXT_PUBLIC_SUPABASE_URL": "https://vubqdsoczdzheuplfutd.supabase.co",
+		"NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_pfWvBtM5d8xA3jucM7_e_w_hYMbxHGA",
+		"NEXT_PUBLIC_SITE_URL": "https://house-hunting-board.lyonsbp.workers.dev"
+	}
+	// Secrets (do NOT commit): set with `wrangler secret put <NAME>`
+	//   SUPABASE_SERVICE_ROLE_KEY  — server-only Supabase admin key (sb_secret_...)
+	//   GEMINI_API_KEY             — image edit / remix (M3, not yet wired)
+	//   FLUX_API_KEY               — fallback image model (M3, not yet wired)
 }
