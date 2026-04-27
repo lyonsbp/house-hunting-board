@@ -153,9 +153,15 @@ enabled = true
 # in emails.
 site_url = "http://localhost:3000"
 # A list of *exact* URLs that auth providers are permitted to redirect to post authentication.
+# IMPORTANT: this file only configures the local Supabase stack. The production
+# project's Site URL and Redirect URLs must be set in the Supabase dashboard at
+# https://supabase.com/dashboard/project/vubqdsoczdzheuplfutd/auth/url-configuration
+# (Site URL = https://house-hunting-board.lyonsbp.workers.dev,
+#  Redirect URLs include the same /auth/callback path).
 additional_redirect_urls = [
   "http://localhost:3000/auth/callback",
   "http://127.0.0.1:3000/auth/callback",
+  "https://house-hunting-board.lyonsbp.workers.dev/auth/callback",
 ]
 # How long tokens are valid for, in seconds. Defaults to 3600 (1 hour), maximum 604,800 (1 week).
 jwt_expiry = 3600

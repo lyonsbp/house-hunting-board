@@ -1,6 +1,6 @@
 "use client";
 
-import { useActionState, useMemo, useState } from "react";
+import { useActionState, useState } from "react";
 import { Button } from "@heroui/react";
 
 import type { ListingPreview } from "@/lib/listings/types";
@@ -18,7 +18,29 @@ const commitInitial: CommitListingState = { status: "idle" };
 const inputCls =
   "w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200";
 
+/**
+ * Outer wrapper: bumps a `resetKey` whenever the inner flow asks to dismiss
+ * itself, which remounts the inner component and clears its `useActionState`
+ * back to the URL-entry phase.
+ */
 export function ListingForm({ boardId }: { boardId: string }) {
+  const [resetKey, setResetKey] = useState(0);
+  return (
+    <ListingFormBody
+      key={resetKey}
+      boardId={boardId}
+      onDismiss={() => setResetKey((k) => k + 1)}
+    />
+  );
+}
+
+function ListingFormBody({
+  boardId,
+  onDismiss,
+}: {
+  boardId: string;
+  onDismiss: () => void;
+}) {
   const [previewState, previewAction, previewPending] = useActionState(
     previewListing,
     previewInitial,
@@ -27,10 +49,10 @@ export function ListingForm({ boardId }: { boardId: string }) {
   if (previewState.status === "ready") {
     return (
       <ListingPicker
-        key={previewState.url}
         boardId={boardId}
         url={previewState.url}
         preview={previewState.preview}
+        onDismiss={onDismiss}
       />
     );
   }
@@ -65,10 +87,12 @@ function ListingPicker({
   boardId,
   url,
   preview,
+  onDismiss,
 }: {
   boardId: string;
   url: string;
   preview: ListingPreview;
+  onDismiss: () => void;
 }) {
   const [selected, setSelected] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(preview.images.map((img) => [img.url, true])),
@@ -79,18 +103,27 @@ function ListingPicker({
     commitInitial,
   );
 
-  const selectedUrls = useMemo(
-    () => preview.images.map((i) => i.url).filter((u) => selected[u]),
-    [preview.images, selected],
-  );
+  // After the import settles, swap the picker for a compact summary so the
+  // user has a definitive end-of-flow rather than the grid lingering.
+  if (commitState.status === "done") {
+    return (
+      <ImportSummary
+        succeeded={commitState.succeeded}
+        failed={commitState.failed}
+        errors={commitState.errors}
+        showErrors={showErrors}
+        onToggleErrors={() => setShowErrors((v) => !v)}
+        onDismiss={onDismiss}
+      />
+    );
+  }
+
+  const selectedUrls = preview.images.map((i) => i.url).filter((u) => selected[u]);
   const toggleAll = (on: boolean) =>
     setSelected(Object.fromEntries(preview.images.map((i) => [i.url, on])));
 
-  const cachedPreviewJson = useMemo(() => JSON.stringify(preview), [preview]);
-  const selectedJson = useMemo(
-    () => JSON.stringify(selectedUrls),
-    [selectedUrls],
-  );
+  const cachedPreviewJson = JSON.stringify(preview);
+  const selectedJson = JSON.stringify(selectedUrls);
 
   const { property } = preview;
   const priceLabel = property.listPrice
@@ -197,40 +230,11 @@ function ListingPicker({
       {commitState.status === "error" && (
         <p className="text-sm text-red-700">{commitState.message}</p>
       )}
-      {commitState.status === "done" && (
-        <div className="rounded-md border border-stone-200 bg-stone-50 px-3 py-2 text-sm text-stone-700">
-          <p>
-            Imported {commitState.succeeded}{" "}
-            {commitState.succeeded === 1 ? "image" : "images"}.
-            {commitState.failed > 0 ? ` ${commitState.failed} failed.` : ""}
-          </p>
-          {commitState.errors.length > 0 && (
-            <>
-              <button
-                type="button"
-                onClick={() => setShowErrors((v) => !v)}
-                className="mt-1 text-[11px] uppercase tracking-wider text-stone-500 hover:text-stone-900"
-              >
-                {showErrors ? "Hide errors" : "Show errors"}
-              </button>
-              {showErrors && (
-                <ul className="mt-2 space-y-1 text-[12px] text-stone-600">
-                  {commitState.errors.map((err, i) => (
-                    <li key={i} className="font-mono">
-                      {err}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </>
-          )}
-        </div>
-      )}
 
       <div className="flex justify-between">
         <button
           type="button"
-          onClick={() => window.location.reload()}
+          onClick={onDismiss}
           className="text-[11px] uppercase tracking-wider text-stone-500 hover:text-stone-900"
         >
           ← Different listing
@@ -248,5 +252,55 @@ function ListingPicker({
         </Button>
       </div>
     </form>
+  );
+}
+
+function ImportSummary({
+  succeeded,
+  failed,
+  errors,
+  showErrors,
+  onToggleErrors,
+  onDismiss,
+}: {
+  succeeded: number;
+  failed: number;
+  errors: string[];
+  showErrors: boolean;
+  onToggleErrors: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="flex flex-col gap-3 rounded-md border border-stone-200 bg-stone-50 px-4 py-3">
+      <div className="flex items-baseline justify-between">
+        <p className="text-sm text-stone-800">
+          Imported {succeeded} {succeeded === 1 ? "image" : "images"}.
+          {failed > 0 ? ` ${failed} failed.` : ""}
+        </p>
+        <Button type="button" variant="primary" onClick={onDismiss}>
+          Done
+        </Button>
+      </div>
+      {errors.length > 0 && (
+        <div>
+          <button
+            type="button"
+            onClick={onToggleErrors}
+            className="text-[11px] uppercase tracking-wider text-stone-500 hover:text-stone-900"
+          >
+            {showErrors ? "Hide errors" : "Show errors"}
+          </button>
+          {showErrors && (
+            <ul className="mt-2 space-y-1 text-[12px] text-stone-600">
+              {errors.map((err, i) => (
+                <li key={i} className="font-mono">
+                  {err}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
