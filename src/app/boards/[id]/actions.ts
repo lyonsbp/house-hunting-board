@@ -601,7 +601,10 @@ const InviteSchema = z.object({
 
 export type InviteState =
   | { status: "idle" }
+  /** New user — Supabase sent them a magic-link invitation email. */
   | { status: "sent"; email: string }
+  /** Existing user — added directly to the board, no email sent. */
+  | { status: "added"; email: string }
   | { status: "error"; message: string };
 
 export async function inviteMember(
@@ -694,5 +697,7 @@ export async function inviteMember(
   }
 
   revalidatePath(`/boards/${boardId}`);
-  return { status: "sent", email };
+  return alreadyRegistered
+    ? { status: "added", email }
+    : { status: "sent", email };
 }

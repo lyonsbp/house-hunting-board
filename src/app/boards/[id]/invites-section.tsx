@@ -29,7 +29,12 @@ export function InvitesSection({
   const formRef = useRef<HTMLFormElement>(null);
 
   useEffect(() => {
-    if (state.status === "sent" && !pending) formRef.current?.reset();
+    if (
+      (state.status === "sent" || state.status === "added") &&
+      !pending
+    ) {
+      formRef.current?.reset();
+    }
   }, [state, pending]);
 
   return (
@@ -115,7 +120,13 @@ export function InvitesSection({
 
       {state.status === "sent" && (
         <p className="text-sm text-emerald-700">
-          Invitation sent to {state.email}.
+          Invitation email sent to {state.email}.
+        </p>
+      )}
+      {state.status === "added" && (
+        <p className="text-sm text-emerald-700">
+          {state.email} already had an account — they were added to this board.
+          They&rsquo;ll see it next time they sign in.
         </p>
       )}
       {state.status === "error" && (
