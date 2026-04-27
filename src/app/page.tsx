@@ -34,12 +34,12 @@ export default async function HomePage() {
               Failed to load boards: {error.message}
             </p>
           ) : boards && boards.length > 0 ? (
-            <ListBox aria-label="Your boards" items={boards}>
-              {(board) => (
+            <ListBox aria-label="Your boards">
+              {boards.map((board) => (
                 <ListBoxItem key={board.id} href={`/boards/${board.id}`}>
                   {board.name}
                 </ListBoxItem>
-              )}
+              ))}
             </ListBox>
           ) : (
             <p className="text-sm opacity-60">

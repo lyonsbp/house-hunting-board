@@ -1,5 +1,6 @@
 "use server";
 
+import { randomUUID } from "node:crypto";
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -30,20 +31,21 @@ export async function createBoard(
     };
   }
 
+  // Generate the id client-side so we can skip RETURNING. Postgres applies
+  // the SELECT policy to the RETURNING row, and at that moment the AFTER
+  // INSERT trigger's membership row isn't visible to the RLS check — so
+  // RETURNING raises a (misleading) RLS error. Without RETURNING the
+  // INSERT just runs the WITH CHECK (true) policy and succeeds.
+  const id = randomUUID();
   const supabase = await createClient();
-  const { data, error } = await supabase
+  const { error } = await supabase
     .from("boards")
-    .insert({ name: parsed.data.name, created_by: user.sub })
-    .select("id")
-    .single();
+    .insert({ id, name: parsed.data.name });
 
-  if (error || !data) {
-    return {
-      status: "error",
-      message: error?.message ?? "Failed to create board.",
-    };
+  if (error) {
+    return { status: "error", message: error.message };
   }
 
   revalidatePath("/");
-  redirect(`/boards/${data.id}`);
+  redirect(`/boards/${id}`);
 }
