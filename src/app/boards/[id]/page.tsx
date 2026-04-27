@@ -42,6 +42,7 @@ export default async function BoardPage({
     { data: artifactTagRows },
     { data: tagRows },
     { data: memberRows },
+    { data: propertyLinkRows },
   ] = await Promise.all([
     supabase
       .from("categories")
@@ -69,6 +70,12 @@ export default async function BoardPage({
       .from("board_members")
       .select("user_id, role")
       .eq("board_id", id),
+    supabase
+      .from("property_artifacts")
+      .select(
+        "artifact_id, artifacts!inner(board_id), properties!inner(address, city, state, source_url)",
+      )
+      .eq("artifacts.board_id", id),
   ]);
 
   const members = memberRows ?? [];
@@ -129,6 +136,27 @@ export default async function BoardPage({
     tagsByArtifact[at.artifact_id] = list;
   }
 
+  // Provenance for image artifacts that came from a listing import.
+  const provenanceByArtifact: Record<
+    string,
+    { address: string | null; city: string | null; state: string | null; sourceUrl: string }
+  > = {};
+  for (const row of propertyLinkRows ?? []) {
+    const propertyJoin = (row as unknown as {
+      properties:
+        | { address: string | null; city: string | null; state: string | null; source_url: string }
+        | { address: string | null; city: string | null; state: string | null; source_url: string }[];
+    }).properties;
+    const property = Array.isArray(propertyJoin) ? propertyJoin[0] : propertyJoin;
+    if (!property) continue;
+    provenanceByArtifact[row.artifact_id] = {
+      address: property.address,
+      city: property.city,
+      state: property.state,
+      sourceUrl: property.source_url,
+    };
+  }
+
   // Pre-sign image URLs server-side so the client never sees raw paths.
   const imagePaths = artifacts
     .filter((a): a is Extract<typeof a, { kind: "image" }> => a.kind === "image")
@@ -183,6 +211,7 @@ export default async function BoardPage({
           membershipsByArtifact={membershipsByArtifact}
           tagsByArtifact={tagsByArtifact}
           allTags={tagRows ?? []}
+          provenanceByArtifact={provenanceByArtifact}
         />
       </section>
 

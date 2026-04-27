@@ -10,6 +10,7 @@ import {
   createTextArtifact,
   type CreateArtifactState,
 } from "./actions";
+import { ListingForm } from "./listing-form";
 
 const initialState: CreateArtifactState = { status: "idle" };
 
@@ -18,6 +19,7 @@ const KINDS = [
   { id: "text", label: "Passage" },
   { id: "link", label: "Link" },
   { id: "image", label: "Image" },
+  { id: "listing", label: "Listing" },
 ] as const;
 type KindId = (typeof KINDS)[number]["id"];
 
@@ -53,6 +55,7 @@ export function AddArtifact({ boardId }: { boardId: string }) {
         {active === "text" && <TextForm boardId={boardId} />}
         {active === "link" && <LinkForm boardId={boardId} />}
         {active === "image" && <ImageForm boardId={boardId} />}
+        {active === "listing" && <ListingForm boardId={boardId} />}
       </div>
     </div>
   );

@@ -38,6 +38,13 @@ type Membership = { categoryId: string; sortOrder: number };
 
 type Tag = { id: string; name: string };
 
+export type ArtifactProvenance = {
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  sourceUrl: string;
+};
+
 type Lane = {
   id: string;
   name: string;
@@ -52,6 +59,7 @@ export function BoardCanvas({
   membershipsByArtifact,
   tagsByArtifact,
   allTags,
+  provenanceByArtifact,
 }: {
   boardId: string;
   artifacts: Artifact[];
@@ -60,6 +68,7 @@ export function BoardCanvas({
   membershipsByArtifact: Record<string, Membership[]>;
   tagsByArtifact: Record<string, Tag[]>;
   allTags: Tag[];
+  provenanceByArtifact: Record<string, ArtifactProvenance>;
 }) {
   const router = useRouter();
 
@@ -229,6 +238,7 @@ export function BoardCanvas({
             tagsByArtifact={tagsByArtifact}
             membershipsByArtifact={membershipsByArtifact}
             allTags={allTags}
+            provenanceByArtifact={provenanceByArtifact}
           />
         ))}
       </div>
@@ -244,6 +254,7 @@ function LaneSection({
   tagsByArtifact,
   membershipsByArtifact,
   allTags,
+  provenanceByArtifact,
 }: {
   lane: Lane;
   boardId: string;
@@ -252,6 +263,7 @@ function LaneSection({
   tagsByArtifact: Record<string, Tag[]>;
   membershipsByArtifact: Record<string, Membership[]>;
   allTags: Tag[];
+  provenanceByArtifact: Record<string, ArtifactProvenance>;
 }) {
   const sortableIds = lane.artifacts.map((a) => `${lane.id}::${a.id}`);
 
@@ -299,6 +311,7 @@ function LaneSection({
                   membershipsByArtifact[art.id]?.map((m) => m.categoryId) ?? []
                 }
                 allTags={allTags}
+                provenance={provenanceByArtifact[art.id]}
               />
             ))}
           </div>
@@ -317,6 +330,7 @@ function SortableCardWrapper({
   tags,
   memberCategoryIds,
   allTags,
+  provenance,
 }: {
   sortableId: string;
   artifact: Artifact;
@@ -326,6 +340,7 @@ function SortableCardWrapper({
   tags: Tag[];
   memberCategoryIds: string[];
   allTags: Tag[];
+  provenance?: ArtifactProvenance;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: sortableId });
@@ -351,6 +366,7 @@ function SortableCardWrapper({
         signedImageUrl={signedImageUrl}
         tags={tags}
         allTags={allTags}
+        provenance={provenance}
       />
     </div>
   );

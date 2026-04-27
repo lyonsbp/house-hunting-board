@@ -1,0 +1,29 @@
+<!doctype html>
+<html>
+<head>
+  <meta property="og:title" content="JSON-LD Fallback" />
+  <meta property="og:image" content="https://ssl.cdn-redfin.com/photo/og.jpg" />
+</head>
+<body>
+  <script type="application/ld+json">
+    {
+      "@type": "SingleFamilyResidence",
+      "name": "456 Cedar Ln",
+      "image": [
+        "https://ssl.cdn-redfin.com/photo/jsonld-1.jpg",
+        "https://ssl.cdn-redfin.com/photo/jsonld-2.jpg"
+      ],
+      "address": {
+        "streetAddress": "456 Cedar Ln",
+        "addressLocality": "Bellevue",
+        "addressRegion": "WA",
+        "postalCode": "98004"
+      },
+      "numberOfBedrooms": 4,
+      "numberOfBathroomsTotal": 3,
+      "yearBuilt": 1998,
+      "offers": {"price": 1200000}
+    }
+  </script>
+</body>
+</html>

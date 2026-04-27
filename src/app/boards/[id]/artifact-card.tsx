@@ -31,6 +31,12 @@ const HAND =
 
 type Category = { id: string; name: string };
 type Tag = { id: string; name: string };
+type Provenance = {
+  address: string | null;
+  city: string | null;
+  state: string | null;
+  sourceUrl: string;
+};
 type PanelKind = null | "categorize" | "tags" | "comments";
 
 export function ArtifactCard({
@@ -41,6 +47,7 @@ export function ArtifactCard({
   memberCategoryIds,
   tags,
   allTags,
+  provenance,
 }: {
   artifact: Artifact;
   boardId: string;
@@ -49,6 +56,7 @@ export function ArtifactCard({
   memberCategoryIds: string[];
   tags: Tag[];
   allTags: Tag[];
+  provenance?: Provenance;
 }) {
   const [openPanel, setOpenPanel] = useState<PanelKind>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -71,7 +79,11 @@ export function ArtifactCard({
         onRemove={() => formRef.current?.requestSubmit()}
       />
 
-      <CardBody artifact={artifact} signedImageUrl={signedImageUrl} />
+      <CardBody
+        artifact={artifact}
+        signedImageUrl={signedImageUrl}
+        provenance={provenance}
+      />
 
       {tags.length > 0 && <TagsRow tags={tags} />}
 
@@ -164,13 +176,21 @@ function TagsRow({ tags }: { tags: Tag[] }) {
 function CardBody({
   artifact,
   signedImageUrl,
+  provenance,
 }: {
   artifact: Artifact;
   signedImageUrl?: string;
+  provenance?: Provenance;
 }) {
   switch (artifact.kind) {
     case "image":
-      return <ImageBody artifact={artifact} signedImageUrl={signedImageUrl} />;
+      return (
+        <ImageBody
+          artifact={artifact}
+          signedImageUrl={signedImageUrl}
+          provenance={provenance}
+        />
+      );
     case "link":
       return <LinkBody artifact={artifact} />;
     case "text":
@@ -183,10 +203,13 @@ function CardBody({
 function ImageBody({
   artifact,
   signedImageUrl,
+  provenance,
 }: {
   artifact: Extract<Artifact, { kind: "image" }>;
   signedImageUrl?: string;
+  provenance?: Provenance;
 }) {
+  const provenanceLabel = provenance ? formatProvenance(provenance) : null;
   return (
     <figure>
       <div className="overflow-hidden rounded-xl bg-stone-100 shadow-[0_2px_24px_-10px_rgba(0,0,0,0.25)]">
@@ -211,8 +234,36 @@ function ImageBody({
           {artifact.body}
         </figcaption>
       )}
+      {provenanceLabel && (
+        <p
+          className="mt-2 px-1 text-[10px] uppercase tracking-[0.18em] text-amber-700/80"
+          style={{ letterSpacing: "0.18em" }}
+        >
+          <a
+            href={provenance!.sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="hover:text-amber-900"
+          >
+            from {provenanceLabel}
+          </a>
+        </p>
+      )}
     </figure>
   );
+}
+
+function formatProvenance(p: Provenance): string {
+  const street = p.address?.trim();
+  const cityState = [p.city, p.state].filter(Boolean).join(", ");
+  if (street && cityState) return `${street}, ${cityState}`;
+  if (street) return street;
+  if (cityState) return cityState;
+  try {
+    return new URL(p.sourceUrl).host.replace(/^www\./, "");
+  } catch {
+    return "listing";
+  }
 }
 
 function LinkBody({
