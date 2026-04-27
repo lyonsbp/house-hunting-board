@@ -1,0 +1,115 @@
+/**
+ * Polymorphic artifact model. The DB stores all artifacts in a single
+ * table (`public.artifacts`) with a `kind` enum + nullable
+ * kind-specific columns + a `metadata` jsonb. In TS we project that
+ * row into a discriminated union so each kind has a precise shape.
+ *
+ * Per AGENTS.md: add new kinds by extending the enum + this union, not
+ * by sharding into new tables.
+ */
+
+export type ArtifactKind = "note" | "text" | "link" | "image";
+
+export type LinkMetadata = {
+  title?: string;
+  description?: string;
+  imageUrl?: string;
+};
+
+export type Artifact =
+  | {
+      kind: "note";
+      id: string;
+      boardId: string;
+      body: string;
+      createdAt: string;
+    }
+  | {
+      kind: "text";
+      id: string;
+      boardId: string;
+      body: string;
+      createdAt: string;
+    }
+  | {
+      kind: "link";
+      id: string;
+      boardId: string;
+      url: string;
+      metadata: LinkMetadata;
+      createdAt: string;
+    }
+  | {
+      kind: "image";
+      id: string;
+      boardId: string;
+      storagePath: string;
+      body?: string;
+      createdAt: string;
+    };
+
+/** Shape of a row coming back from `select * from public.artifacts`. */
+export type ArtifactRow = {
+  id: string;
+  board_id: string;
+  kind: string;
+  storage_path: string | null;
+  url: string | null;
+  body: string | null;
+  metadata: Record<string, unknown> | null;
+  created_at: string;
+};
+
+function readString(value: unknown): string | undefined {
+  return typeof value === "string" && value.length > 0 ? value : undefined;
+}
+
+function parseLinkMetadata(raw: Record<string, unknown> | null): LinkMetadata {
+  if (!raw) return {};
+  return {
+    title: readString(raw.title),
+    description: readString(raw.description),
+    imageUrl: readString(raw.image_url) ?? readString(raw.imageUrl),
+  };
+}
+
+export function toArtifact(row: ArtifactRow): Artifact {
+  switch (row.kind) {
+    case "note":
+      return {
+        kind: "note",
+        id: row.id,
+        boardId: row.board_id,
+        body: row.body ?? "",
+        createdAt: row.created_at,
+      };
+    case "text":
+      return {
+        kind: "text",
+        id: row.id,
+        boardId: row.board_id,
+        body: row.body ?? "",
+        createdAt: row.created_at,
+      };
+    case "link":
+      return {
+        kind: "link",
+        id: row.id,
+        boardId: row.board_id,
+        url: row.url ?? "",
+        metadata: parseLinkMetadata(row.metadata),
+        createdAt: row.created_at,
+      };
+    case "image":
+      return {
+        kind: "image",
+        id: row.id,
+        boardId: row.board_id,
+        storagePath: row.storage_path ?? "",
+        body: row.body ?? undefined,
+        createdAt: row.created_at,
+      };
+    default:
+      throw new Error(`Unknown artifact kind: ${row.kind}`);
+  }
+}
