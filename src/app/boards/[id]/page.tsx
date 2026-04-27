@@ -10,6 +10,7 @@ import { AddArtifact } from "./add-artifact";
 import { BoardCanvas } from "./board-canvas";
 import { CategoriesSection } from "./categories-section";
 import { InvitesSection, type Member } from "./invites-section";
+import { ListingsPanel, type ImportedListing } from "./listings-panel";
 import { PasteImageListener } from "./paste-image-listener";
 import { RealtimeBridge } from "./realtime-bridge";
 
@@ -73,7 +74,7 @@ export default async function BoardPage({
     supabase
       .from("property_artifacts")
       .select(
-        "artifact_id, artifacts!inner(board_id), properties!inner(address, city, state, source_url)",
+        "artifact_id, artifacts!inner(board_id), properties!inner(id, source, source_url, address, city, state, zip, list_price, sold_price, bedrooms, bathrooms, sqft, year_built, status, scraped_at)",
       )
       .eq("artifacts.board_id", id),
   ]);
@@ -136,26 +137,70 @@ export default async function BoardPage({
     tagsByArtifact[at.artifact_id] = list;
   }
 
-  // Provenance for image artifacts that came from a listing import.
+  // Provenance for image artifacts that came from a listing import,
+  // plus a deduped per-board listings catalog with photo counts (for the
+  // "Listings imported" panel).
+  type PropertyJoin = {
+    id: string;
+    source: string;
+    source_url: string;
+    address: string | null;
+    city: string | null;
+    state: string | null;
+    zip: string | null;
+    list_price: number | null;
+    sold_price: number | null;
+    bedrooms: number | null;
+    bathrooms: number | null;
+    sqft: number | null;
+    year_built: number | null;
+    status: string | null;
+    scraped_at: string;
+  };
   const provenanceByArtifact: Record<
     string,
     { address: string | null; city: string | null; state: string | null; sourceUrl: string }
   > = {};
+  const listingsById = new Map<string, ImportedListing>();
   for (const row of propertyLinkRows ?? []) {
     const propertyJoin = (row as unknown as {
-      properties:
-        | { address: string | null; city: string | null; state: string | null; source_url: string }
-        | { address: string | null; city: string | null; state: string | null; source_url: string }[];
+      properties: PropertyJoin | PropertyJoin[];
     }).properties;
-    const property = Array.isArray(propertyJoin) ? propertyJoin[0] : propertyJoin;
-    if (!property) continue;
+    const p = Array.isArray(propertyJoin) ? propertyJoin[0] : propertyJoin;
+    if (!p) continue;
     provenanceByArtifact[row.artifact_id] = {
-      address: property.address,
-      city: property.city,
-      state: property.state,
-      sourceUrl: property.source_url,
+      address: p.address,
+      city: p.city,
+      state: p.state,
+      sourceUrl: p.source_url,
     };
+    const existing = listingsById.get(p.id);
+    if (existing) {
+      existing.photoCount += 1;
+      continue;
+    }
+    listingsById.set(p.id, {
+      id: p.id,
+      source: p.source,
+      sourceUrl: p.source_url,
+      address: p.address,
+      city: p.city,
+      state: p.state,
+      zip: p.zip,
+      listPrice: p.list_price,
+      soldPrice: p.sold_price,
+      bedrooms: p.bedrooms,
+      bathrooms: p.bathrooms,
+      sqft: p.sqft,
+      yearBuilt: p.year_built,
+      status: p.status,
+      scrapedAt: p.scraped_at,
+      photoCount: 1,
+    });
   }
+  const listings: ImportedListing[] = [...listingsById.values()].sort(
+    (a, b) => b.scrapedAt.localeCompare(a.scrapedAt),
+  );
 
   // Pre-sign image URLs server-side so the client never sees raw paths.
   const imagePaths = artifacts
@@ -200,6 +245,14 @@ export default async function BoardPage({
           />
         </CardContent>
       </Card>
+
+      {listings.length > 0 && (
+        <Card>
+          <CardContent>
+            <ListingsPanel listings={listings} />
+          </CardContent>
+        </Card>
+      )}
 
       <section className="space-y-6">
         <AddArtifact boardId={board.id} />
