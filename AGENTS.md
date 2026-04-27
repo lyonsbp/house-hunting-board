@@ -17,30 +17,6 @@ feature; it's the source of truth for scope, data model, and milestones.
 - **Cloudflare Workers** via `@opennextjs/cloudflare` for hosting (no Vercel)
 - **Vitest** + Testing Library for unit tests
 
-## Commands
-
-```bash
-pnpm dev              # Next.js dev server (turbopack, http://localhost:3000)
-pnpm test             # Vitest, single run
-pnpm test:watch       # Vitest in watch mode
-pnpm lint             # ESLint
-pnpm build            # Next.js production build
-pnpm cf:build         # OpenNext: build for Cloudflare Workers
-pnpm preview          # Build + run locally on Workers via wrangler
-pnpm deploy           # Build + deploy to Cloudflare
-pnpm cf-typegen       # Generate CloudflareEnv types from wrangler.jsonc
-
-# Run a single test file or a single test by name
-pnpm test path/to/file.test.ts
-pnpm test -t "partial test name"
-
-# Local Supabase (Postgres + Auth + Storage + Realtime in Docker; needs Docker running)
-pnpm exec supabase start
-pnpm exec supabase db reset      # re-apply all migrations from scratch
-pnpm exec supabase migration new <name>
-pnpm exec supabase stop
-```
-
 ## Architecture (big picture)
 
 Three runtimes, one Postgres:
@@ -91,28 +67,7 @@ swap; keep the storage layer abstracted so that swap is a one-file change.
 - Keep schema changes in `supabase/migrations/` — never edit applied
   migrations; add a new one.
 
-## Layout
-
-```
-src/
-  app/                  # Next.js App Router routes
-  lib/
-    supabase/
-      client.ts         # browser client (anon key)
-      server.ts         # SSR/RSC client (cookie-bound)
-    __tests__/          # colocated tests (also accepted: *.test.ts next to source)
-supabase/
-  migrations/           # SQL migrations — append-only, never edit applied ones
-  config.toml
-workers/                # (future) Cloudflare Workers for scrape/queue/AI jobs
-open-next.config.ts     # OpenNext adapter config
-wrangler.jsonc          # Cloudflare Worker config + bindings
-vitest.config.ts        # Vitest config
-```
-
 ## Environment
 
-- Copy `.env.local.example` → `.env.local` for `pnpm dev`.
-- Copy the same values into `.dev.vars` for `pnpm preview` (wrangler reads
-  this when running locally on Workers).
-- Production secrets: `wrangler secret put <NAME>`.
+- `.env.local` for `pnpm dev`; `.dev.vars` for `pnpm preview` (wrangler);
+  `wrangler secret put <NAME>` for production. See `.env.local.example`.
