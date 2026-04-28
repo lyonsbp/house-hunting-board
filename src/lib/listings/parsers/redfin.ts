@@ -5,6 +5,7 @@ import {
   type ListingPreview,
   type ListingPreviewImage,
   type ListingPreviewProperty,
+  type PropertyPriceEvent,
 } from "../types";
 import {
   asInt,
@@ -136,11 +137,25 @@ function parseEmbeddedReactState(
 
   if (imageUrls.length === 0) return null;
 
+  // Pull listing-history events out of `propertyHistoryInfo.events` —
+  // typically lives on a sibling node alongside addressSectionInfo.
+  let priceHistory: PropertyPriceEvent[] = [];
+  for (const node of nodes) {
+    const phi = node.propertyHistoryInfo;
+    if (phi && typeof phi === "object" && Array.isArray((phi as Record<string, unknown>).events)) {
+      priceHistory = parseRedfinHistoryEvents(
+        (phi as { events: unknown[] }).events,
+      );
+      if (priceHistory.length > 0) break;
+    }
+  }
+
   const property = buildPropertyFromRedfinNode(
     propertyNode ?? {},
     sourceUrl,
     blob,
   );
+  property.priceHistory = priceHistory;
   const images: ListingPreviewImage[] = dedupeImages(imageUrls);
 
   return {
@@ -470,4 +485,38 @@ function extractFloorSize(node: Record<string, unknown>): unknown {
     return (fs as Record<string, unknown>).value;
   }
   return fs;
+}
+
+/**
+ * Map Redfin's `propertyHistoryInfo.events` into our unified shape.
+ * Redfin events look like:
+ *   { eventDescription: "Sold (MLS)", price: 2700000,
+ *     eventDate: 1623308400000 /* unix ms *\/ , historyEventType: 2, ... }
+ *
+ * The price is sold vs list depending on the description — "Sold" / "Closed"
+ * → soldPrice; everything else (Listed / Price Changed / Pending / etc) is
+ * a list price. Skip events with no usable date.
+ */
+function parseRedfinHistoryEvents(raw: unknown[]): PropertyPriceEvent[] {
+  const out: PropertyPriceEvent[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    const dateMs = asNumber(obj.eventDate);
+    if (dateMs === undefined) continue;
+    const description = asString(obj.eventDescription) ?? "";
+    const price = asNumber(obj.price);
+    const isSold = /sold|closed/i.test(description);
+    const date = new Date(dateMs).toISOString();
+    out.push({
+      date,
+      event: description || asString(obj.mlsDescription) || "Event",
+      listPrice: !isSold && price && price > 0 ? price : undefined,
+      soldPrice: isSold && price && price > 0 ? price : undefined,
+      status: description || asString(obj.mlsDescription),
+    });
+  }
+  // Newest first — matches the order the Redfin UI displays history in
+  // and what page.tsx expects when picking a "prior" snapshot.
+  return out.sort((a, b) => b.date.localeCompare(a.date));
 }

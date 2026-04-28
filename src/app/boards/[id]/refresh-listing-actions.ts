@@ -152,7 +152,32 @@ export async function refreshListing(input: {
     sold_price: newSoldPrice,
     status: newStatus,
     scraped_at: preview.scrapedAt,
+    source: "scrape",
   });
+
+  // Replace the listing-history rows with what the source publishes now.
+  // Their event_dates are stable (they reflect actual past events) but
+  // refreshing might surface new ones (a fresh price drop, a status
+  // change to Pending). Delete-and-replace is simpler than detecting
+  // diffs and the volume per property is tiny.
+  const refreshedHistory = preview.property.priceHistory ?? [];
+  await admin
+    .from("property_snapshots")
+    .delete()
+    .eq("property_id", property.id)
+    .eq("source", "listing");
+  if (refreshedHistory.length > 0) {
+    await admin.from("property_snapshots").insert(
+      refreshedHistory.map((h) => ({
+        property_id: property.id,
+        list_price: h.listPrice ?? null,
+        sold_price: h.soldPrice ?? null,
+        status: h.status ?? h.event,
+        scraped_at: h.date,
+        source: "listing",
+      })),
+    );
+  }
 
   // Update the canonical `properties` row. We don't blindly upsert all
   // fields — the user may have manually corrected things, so we only

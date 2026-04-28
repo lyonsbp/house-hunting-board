@@ -5,6 +5,7 @@ import {
   type ListingPreview,
   type ListingPreviewImage,
   type ListingPreviewProperty,
+  type PropertyPriceEvent,
 } from "../types";
 import {
   asInt,
@@ -84,6 +85,7 @@ function parseFromNextData(
     sourceUrl,
     propertyNode,
   );
+  property.priceHistory = parseZillowPriceHistory(propertyNode.priceHistory);
 
   return {
     property,
@@ -92,6 +94,43 @@ function parseFromNextData(
     partial: false,
     scrapedAt: new Date().toISOString(),
   };
+}
+
+/**
+ * Map Zillow's `priceHistory` array into our unified event shape.
+ * Each Zillow entry: { date: "YYYY-MM-DD", time?: ms, price: number,
+ * event: "Listed for sale" | "Price change" | "Sold" | "Pending sale" | ... }
+ */
+function parseZillowPriceHistory(raw: unknown): PropertyPriceEvent[] {
+  if (!Array.isArray(raw)) return [];
+  const out: PropertyPriceEvent[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const obj = item as Record<string, unknown>;
+    let isoDate: string | null = null;
+    const time = asNumber(obj.time);
+    if (time !== undefined) {
+      isoDate = new Date(time).toISOString();
+    } else {
+      const dateStr = asString(obj.date);
+      if (dateStr) {
+        const d = new Date(dateStr);
+        if (!Number.isNaN(d.getTime())) isoDate = d.toISOString();
+      }
+    }
+    if (!isoDate) continue;
+    const event = asString(obj.event) ?? "Event";
+    const price = asNumber(obj.price);
+    const isSold = /sold/i.test(event);
+    out.push({
+      date: isoDate,
+      event,
+      listPrice: !isSold && price && price > 0 ? price : undefined,
+      soldPrice: isSold && price && price > 0 ? price : undefined,
+      status: event,
+    });
+  }
+  return out.sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function collectObjectsAndParseableStrings(

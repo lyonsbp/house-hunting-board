@@ -307,7 +307,26 @@ export async function commitListingImport(
     sold_price: cachedPreview.property.soldPrice ?? null,
     status: cachedPreview.property.status ?? null,
     scraped_at: cachedPreview.scrapedAt,
+    source: "scrape",
   });
+
+  // Plus every event in the listing's own price history if the parser
+  // extracted any. These are dated by the source (e.g. "$1.4M on Jan 15"),
+  // not by when we scraped, so they give us a real trajectory on day 1
+  // instead of having to wait for refreshes to accumulate one.
+  const history = cachedPreview.property.priceHistory ?? [];
+  if (history.length > 0) {
+    await admin.from("property_snapshots").insert(
+      history.map((h) => ({
+        property_id: propertyId,
+        list_price: h.listPrice ?? null,
+        sold_price: h.soldPrice ?? null,
+        status: h.status ?? h.event,
+        scraped_at: h.date,
+        source: "listing",
+      })),
+    );
+  }
 
   // Bounded-parallel image download + upload. Each entry retains its
   // position in the original selection so the saved `image_index` metadata

@@ -240,35 +240,39 @@ export default async function BoardPage({
       featuresByProperty.set(row.property_id, list);
     }
 
-    // Pick the prior snapshot per property — the most recent one whose
-    // values differ from the live property. Single pass since rows are
-    // already sorted desc.
+    // Pick the prior snapshot per property: the most recent snapshot
+    // whose price (or status) actually differs from the listing's
+    // current state. Without the "differs" filter we'd often pick a
+    // listing-history event that simply mirrors today's price (e.g.
+    // sold_price = current sold_price), which yields a $0 delta and
+    // adds noise instead of insight.
     type Snap = {
       list_price: number | null;
       sold_price: number | null;
       status: string | null;
       scraped_at: string;
     };
-    const priorByProperty = new Map<string, Snap>();
-    const seenForProperty = new Map<string, number>();
+    const snapshotsByProperty = new Map<string, Snap[]>();
     for (const row of snapshotRows ?? []) {
-      const seen = seenForProperty.get(row.property_id) ?? 0;
-      seenForProperty.set(row.property_id, seen + 1);
-      // The first snapshot seen per property is the most recent (matches the
-      // current property values); we want the next one back as the "prior".
-      if (seen === 1 && !priorByProperty.has(row.property_id)) {
-        priorByProperty.set(row.property_id, {
-          list_price: row.list_price,
-          sold_price: row.sold_price,
-          status: row.status,
-          scraped_at: row.scraped_at,
-        });
-      }
+      const list = snapshotsByProperty.get(row.property_id) ?? [];
+      list.push({
+        list_price: row.list_price,
+        sold_price: row.sold_price,
+        status: row.status,
+        scraped_at: row.scraped_at,
+      });
+      snapshotsByProperty.set(row.property_id, list);
     }
 
     for (const l of listings) {
       l.features = featuresByProperty.get(l.id) ?? [];
-      const prior = priorByProperty.get(l.id);
+      const snaps = snapshotsByProperty.get(l.id) ?? [];
+      const prior = snaps.find(
+        (s) =>
+          s.list_price !== l.listPrice ||
+          s.sold_price !== l.soldPrice ||
+          s.status !== l.status,
+      );
       if (prior) {
         l.priorSnapshot = {
           listPrice: prior.list_price,

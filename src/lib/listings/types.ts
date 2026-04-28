@@ -29,8 +29,29 @@ export interface ListingPreviewProperty {
   lotSqft?: number;
   yearBuilt?: number;
   status?: string;
+  /** Listing-history events from the source's own price-change log. */
+  priceHistory?: PropertyPriceEvent[];
   /** The chunk we parsed; persisted into `properties.raw` for provenance. */
   raw: unknown;
+}
+
+/**
+ * A price/status event from the listing's own history tab.
+ * Both Redfin (`propertyHistoryInfo.events`) and Zillow (`priceHistory`)
+ * publish full trajectories that we can ingest at scrape time, vs only
+ * accumulating one observation per refresh.
+ */
+export interface PropertyPriceEvent {
+  /** ISO 8601 timestamp of when this event happened on the source. */
+  date: string;
+  /** Source-provided label, e.g. "Listed for sale", "Price change", "Sold". */
+  event: string;
+  /** Asking price at the time of this event, when applicable. */
+  listPrice?: number;
+  /** Sold price at the time of this event, when applicable. */
+  soldPrice?: number;
+  /** Status reflected by this event (often the same string as `event`). */
+  status?: string;
 }
 
 export interface ListingPreviewImage {
