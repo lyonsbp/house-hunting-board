@@ -267,6 +267,22 @@ describe("commitListingImport", () => {
       }
       if (table === "artifacts") {
         return {
+          // Dedupe lookup before download: returns no existing match so
+          // the test exercises the full download path.
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                eq: vi.fn().mockReturnValue({
+                  limit: vi.fn().mockReturnValue({
+                    maybeSingle: vi.fn().mockResolvedValue({
+                      data: null,
+                      error: null,
+                    }),
+                  }),
+                }),
+              }),
+            }),
+          }),
           insert: vi.fn().mockReturnValue({
             select: vi.fn().mockReturnValue({
               single: vi.fn().mockResolvedValue({
@@ -283,6 +299,7 @@ describe("commitListingImport", () => {
       if (table === "property_artifacts") {
         return {
           insert: vi.fn().mockResolvedValue({ error: null }),
+          upsert: vi.fn().mockResolvedValue({ error: null }),
         };
       }
       throw new Error(`unexpected user table ${table}`);
@@ -360,7 +377,25 @@ describe("commitListingImport", () => {
         };
       }
       if (table === "artifacts") {
+        // Build a chain that supports BOTH the dedupe-lookup
+        // select(...).eq.eq.eq.limit.maybeSingle returning null AND the
+        // insert path that intentionally fails so rollback gets exercised.
+        const dedupeLookup = {
+          eq: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                limit: vi.fn().mockReturnValue({
+                  maybeSingle: vi.fn().mockResolvedValue({
+                    data: null,
+                    error: null,
+                  }),
+                }),
+              }),
+            }),
+          }),
+        };
         return {
+          select: vi.fn().mockReturnValue(dedupeLookup),
           insert: vi.fn().mockReturnValue({
             select: vi.fn().mockReturnValue({
               single: vi.fn().mockResolvedValue({
@@ -375,7 +410,10 @@ describe("commitListingImport", () => {
         };
       }
       if (table === "property_artifacts") {
-        return { insert: vi.fn().mockResolvedValue({ error: null }) };
+        return {
+          insert: vi.fn().mockResolvedValue({ error: null }),
+          upsert: vi.fn().mockResolvedValue({ error: null }),
+        };
       }
       throw new Error(`unexpected ${table}`);
     });

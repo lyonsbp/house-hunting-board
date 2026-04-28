@@ -110,6 +110,7 @@ function ListingPicker({
       <ImportSummary
         succeeded={commitState.succeeded}
         failed={commitState.failed}
+        deduped={commitState.deduped}
         errors={commitState.errors}
         showErrors={showErrors}
         onToggleErrors={() => setShowErrors((v) => !v)}
@@ -258,6 +259,7 @@ function ListingPicker({
 function ImportSummary({
   succeeded,
   failed,
+  deduped,
   errors,
   showErrors,
   onToggleErrors,
@@ -265,16 +267,23 @@ function ImportSummary({
 }: {
   succeeded: number;
   failed: number;
+  deduped: number;
   errors: string[];
   showErrors: boolean;
   onToggleErrors: () => void;
   onDismiss: () => void;
 }) {
+  // succeeded already includes deduped (same outcome from the user's POV
+  // — the photo ended up linked to the property), so just call it out
+  // separately so they know we didn't waste a download.
   return (
     <div className="flex flex-col gap-3 rounded-md border border-stone-200 bg-stone-50 px-4 py-3">
       <div className="flex items-baseline justify-between">
         <p className="text-sm text-stone-800">
           Imported {succeeded} {succeeded === 1 ? "image" : "images"}.
+          {deduped > 0
+            ? ` ${deduped} already on the board — re-linked instead of re-downloaded.`
+            : ""}
           {failed > 0 ? ` ${failed} failed.` : ""}
         </p>
         <Button type="button" variant="primary" onClick={onDismiss}>

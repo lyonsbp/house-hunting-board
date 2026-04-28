@@ -1,0 +1,42 @@
+name: CI
+
+# Runs on every push and PR. No deploy step — that stays manual via
+# `pnpm run deploy` so we don't accidentally ship from a half-reviewed
+# branch. The point here is just a safety net: catch broken tests, lint
+# regressions, and TypeScript errors before they land on main.
+on:
+  push:
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          # Match the version used locally (engineers and CI on the same
+          # major makes "works on my machine" lies less likely).
+          node-version: 24
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm test
+
+      - run: pnpm lint
+
+      # `next build` runs typecheck + bundle. Skip the OpenNext +
+      # Cloudflare deploy paths — those are validated at deploy time.
+      - run: pnpm build

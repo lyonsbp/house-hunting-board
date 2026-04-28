@@ -179,6 +179,8 @@ export type CommitListingState =
       status: "done";
       succeeded: number;
       failed: number;
+      /** Already-on-this-board images that we linked instead of re-downloading. */
+      deduped: number;
       errors: string[];
       boardId: string;
     }
@@ -333,6 +335,7 @@ export async function commitListingImport(
   // matches the order the user picked.
   const errors: string[] = [];
   let succeeded = 0;
+  let deduped = 0;
   const queue: Array<[number, string]> = parsed.data.selectedImageUrls.map(
     (u, i) => [i, u],
   );
@@ -354,6 +357,7 @@ export async function commitListingImport(
       });
       if (ok.ok) {
         succeeded++;
+        if (ok.deduped) deduped++;
       } else {
         errors.push(ok.error);
       }
@@ -378,6 +382,7 @@ export async function commitListingImport(
     status: "done",
     succeeded,
     failed: errors.length,
+    deduped,
     errors,
     boardId: parsed.data.boardId,
   };
@@ -396,7 +401,31 @@ type ImportOneArgs = {
 
 async function importOneImage(
   args: ImportOneArgs,
-): Promise<{ ok: true } | { ok: false; error: string }> {
+): Promise<{ ok: true; deduped?: boolean } | { ok: false; error: string }> {
+  // Dedupe: if this image already exists on the board (same listing
+  // re-imported, or the same photo on Redfin AND Zillow on this board),
+  // skip the download and just ensure the existing artifact is linked
+  // to this property too. Saves Storage + Scrapfly credit.
+  const { data: existing } = await args.supabase
+    .from("artifacts")
+    .select("id")
+    .eq("board_id", args.boardId)
+    .eq("kind", "image")
+    .eq("metadata->>image_source_url", args.imageUrl)
+    .limit(1)
+    .maybeSingle();
+  if (existing?.id) {
+    // Idempotent link insert — if the row already exists, the unique
+    // constraint on (property_id, artifact_id) just no-ops.
+    await args.supabase
+      .from("property_artifacts")
+      .upsert(
+        { property_id: args.propertyId, artifact_id: existing.id },
+        { onConflict: "property_id,artifact_id", ignoreDuplicates: true },
+      );
+    return { ok: true, deduped: true };
+  }
+
   let res: Response;
   try {
     res = await fetch(args.imageUrl, {
