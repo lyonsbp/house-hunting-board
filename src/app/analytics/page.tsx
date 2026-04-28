@@ -5,10 +5,12 @@ import { Card, CardContent } from "@heroui/react";
 import { FEATURE_TAXONOMY } from "@/lib/ai/feature-extractor";
 import {
   buildCohortTable,
+  pricePerSqft,
   pricedPropertyCount,
   type AnalyticsProperty,
   type AnalyticsSignal,
 } from "@/lib/analytics/cohort";
+import { metroForZip } from "@/lib/analytics/metros";
 import { getCurrentUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
@@ -50,6 +52,18 @@ export default async function AnalyticsPage({
 
   const properties: AnalyticsProperty[] = propertyRows ?? [];
   const signals: AnalyticsSignal[] = signalRows ?? [];
+
+  // Walk all priced properties once to figure out which metros actually
+  // have data — feeds the filter UI's enabled/disabled split below.
+  const metrosWithDataSet = new Set<string>();
+  for (const p of properties) {
+    if (pricePerSqft(p) === null) continue;
+    const m = metroForZip(p.zip);
+    if (m) metrosWithDataSet.add(m);
+  }
+  const metrosWithData = [...metrosWithDataSet].sort((a, b) =>
+    a.localeCompare(b),
+  );
 
   const totalPriced = pricedPropertyCount(properties, { metro });
   const rows = buildCohortTable(properties, signals, FEATURE_TAXONOMY, { metro })
@@ -95,7 +109,7 @@ export default async function AnalyticsPage({
       </header>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <MetroFilter />
+        <MetroFilter metrosWithData={metrosWithData} />
         <p className="text-[11px] uppercase tracking-wide text-stone-400">
           {totalPriced.toLocaleString()} priced properties
         </p>
