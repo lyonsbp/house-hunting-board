@@ -19,6 +19,15 @@ export type PriorSnapshot = {
   scrapedAt: string;
 };
 
+export type PriceHistoryEntry = {
+  listPrice: number | null;
+  soldPrice: number | null;
+  status: string | null;
+  scrapedAt: string;
+  /** 'listing' (event from the source's own history) or 'scrape' (we polled). */
+  source: string;
+};
+
 export type ImportedListing = {
   id: string;
   source: string;
@@ -44,6 +53,11 @@ export type ImportedListing = {
    * Present only when the listing has been refreshed at least once.
    */
   priorSnapshot?: PriorSnapshot;
+  /**
+   * Full deduped timeline of snapshots for this property, oldest first.
+   * Present whenever there's at least one snapshot row for the property.
+   */
+  priceHistory?: PriceHistoryEntry[];
 };
 
 export function ListingsPanel({ listings }: { listings: ImportedListing[] }) {
@@ -80,6 +94,7 @@ function ListingRow({ listing }: { listing: ImportedListing }) {
   const [refreshPending, startRefreshTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [refreshError, setRefreshError] = useState<string | null>(null);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   function reextract() {
     setError(null);
@@ -106,6 +121,8 @@ function ListingRow({ listing }: { listing: ImportedListing }) {
       refreshPending={refreshPending}
       refreshError={refreshError}
       onRefresh={refresh}
+      historyOpen={historyOpen}
+      setHistoryOpen={setHistoryOpen}
     />
   );
 }
@@ -118,6 +135,8 @@ function ListingRowInner({
   refreshPending,
   refreshError,
   onRefresh,
+  historyOpen,
+  setHistoryOpen,
 }: {
   listing: ImportedListing;
   pending: boolean;
@@ -126,6 +145,8 @@ function ListingRowInner({
   refreshPending: boolean;
   refreshError: string | null;
   onRefresh: () => void;
+  historyOpen: boolean;
+  setHistoryOpen: (next: boolean | ((prev: boolean) => boolean)) => void;
 }) {
   const stats: string[] = [];
   if (listing.bedrooms !== null) stats.push(`${listing.bedrooms} bd`);
@@ -234,6 +255,17 @@ function ListingRowInner({
           >
             {refreshPending ? "Refreshing…" : "Refresh"}
           </button>
+          {(listing.priceHistory?.length ?? 0) > 1 && (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="text-stone-400 hover:text-stone-700"
+              title="Toggle the listing's full price + status timeline"
+              aria-expanded={historyOpen}
+            >
+              {historyOpen ? "Hide history" : "History"}
+            </button>
+          )}
           <time dateTime={listing.scrapedAt} className="text-stone-400">
             {formatScraped(listing.scrapedAt)}
           </time>
@@ -242,6 +274,10 @@ function ListingRowInner({
 
       {refreshError && (
         <p className="text-[11px] text-red-700">{refreshError}</p>
+      )}
+
+      {historyOpen && listing.priceHistory && (
+        <PriceHistoryTimeline entries={listing.priceHistory} />
       )}
 
       {(featureList.length > 0 || pending || error) && (
@@ -304,6 +340,68 @@ function formatScraped(iso: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+function PriceHistoryTimeline({ entries }: { entries: PriceHistoryEntry[] }) {
+  // Newest first when displayed — most users want to see "what changed
+  // recently?" before "what was the original list price?". Original
+  // ordering in the data is oldest-first; reverse for display.
+  const ordered = [...entries].reverse();
+
+  return (
+    <ol className="ml-1 mt-1 flex flex-col gap-2 border-l border-stone-200 pl-4 text-[12px]">
+      {ordered.map((e, i) => {
+        const next = ordered[i + 1]; // older entry
+        const headlinePrice = e.soldPrice ?? e.listPrice ?? null;
+        const priorPrice = next ? (next.soldPrice ?? next.listPrice ?? null) : null;
+        const delta =
+          headlinePrice !== null && priorPrice !== null && headlinePrice !== priorPrice
+            ? headlinePrice - priorPrice
+            : null;
+        const label = e.status ?? (e.source === "scrape" ? "Observed" : "Event");
+        return (
+          <li key={`${e.scrapedAt}-${i}`} className="relative">
+            <span
+              aria-hidden="true"
+              className={`absolute -left-[18px] top-1 inline-block h-2 w-2 rounded-full ${
+                e.source === "scrape"
+                  ? "bg-stone-300 ring-2 ring-stone-100"
+                  : "bg-amber-700/80 ring-2 ring-amber-100"
+              }`}
+            />
+            <div className="flex flex-wrap items-baseline gap-x-3">
+              <span className="font-medium text-stone-800">{label}</span>
+              <time
+                dateTime={e.scrapedAt}
+                className="text-[11px] uppercase tracking-wide text-stone-400"
+              >
+                {formatScraped(e.scrapedAt)}
+              </time>
+              {headlinePrice !== null && (
+                <span className="tabular-nums text-stone-700">
+                  ${headlinePrice.toLocaleString()}
+                </span>
+              )}
+              {delta !== null && (
+                <span
+                  className={`tabular-nums ${
+                    delta < 0 ? "text-emerald-700" : "text-red-700"
+                  }`}
+                >
+                  {delta < 0 ? "↓" : "↑"}${Math.abs(delta).toLocaleString()}
+                </span>
+              )}
+              {e.source === "scrape" && (
+                <span className="text-[10px] uppercase tracking-wide text-stone-400">
+                  scrape
+                </span>
+              )}
+            </div>
+          </li>
+        );
+      })}
+    </ol>
+  );
 }
 
 function FeatureChip({

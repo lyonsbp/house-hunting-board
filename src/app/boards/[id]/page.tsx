@@ -225,7 +225,7 @@ export default async function BoardPage({
         .order("confidence", { ascending: false }),
       supabase
         .from("property_snapshots")
-        .select("property_id, list_price, sold_price, status, scraped_at")
+        .select("property_id, list_price, sold_price, status, scraped_at, source")
         .in("property_id", propertyIds)
         .order("scraped_at", { ascending: false }),
     ]);
@@ -251,6 +251,7 @@ export default async function BoardPage({
       sold_price: number | null;
       status: string | null;
       scraped_at: string;
+      source: string;
     };
     const snapshotsByProperty = new Map<string, Snap[]>();
     for (const row of snapshotRows ?? []) {
@@ -260,6 +261,7 @@ export default async function BoardPage({
         sold_price: row.sold_price,
         status: row.status,
         scraped_at: row.scraped_at,
+        source: row.source ?? "scrape",
       });
       snapshotsByProperty.set(row.property_id, list);
     }
@@ -267,6 +269,7 @@ export default async function BoardPage({
     for (const l of listings) {
       l.features = featuresByProperty.get(l.id) ?? [];
       const snaps = snapshotsByProperty.get(l.id) ?? [];
+
       const prior = snaps.find(
         (s) =>
           s.list_price !== l.listPrice ||
@@ -280,6 +283,33 @@ export default async function BoardPage({
           status: prior.status,
           scrapedAt: prior.scraped_at,
         };
+      }
+
+      // Build the inline timeline: oldest → newest, dedupe consecutive
+      // entries that have identical price + status (a refresh that didn't
+      // change anything is just noise here). Cap at 20 to keep the row
+      // from growing unbounded.
+      const ascending = [...snaps].reverse();
+      const deduped: Snap[] = [];
+      for (const s of ascending) {
+        const last = deduped[deduped.length - 1];
+        const sameAsLast =
+          !!last &&
+          last.list_price === s.list_price &&
+          last.sold_price === s.sold_price &&
+          last.status === s.status;
+        if (sameAsLast) continue;
+        deduped.push(s);
+      }
+      const trimmed = deduped.slice(-20);
+      if (trimmed.length > 0) {
+        l.priceHistory = trimmed.map((s) => ({
+          listPrice: s.list_price,
+          soldPrice: s.sold_price,
+          status: s.status,
+          scrapedAt: s.scraped_at,
+          source: s.source,
+        }));
       }
     }
   }
