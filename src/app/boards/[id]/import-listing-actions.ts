@@ -20,6 +20,8 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
+import { runExtraction } from "./feature-actions";
+
 const MAX_IMAGES_PER_IMPORT = 60;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PER_IMAGE_TIMEOUT_MS = 10_000;
@@ -327,6 +329,17 @@ export async function commitListingImport(
     }
   });
   await Promise.all(workers);
+
+  // Run the LLM feature extractor synchronously after the artifacts land.
+  // Adds ~2-3s on top of the image downloads but means signals appear in
+  // the listings panel on the same render as the imported photos. Failures
+  // here don't fail the import — the property + artifacts are already
+  // saved and the user can hit "Re-extract" later.
+  try {
+    await runExtraction(propertyId, null);
+  } catch (e) {
+    console.error("Feature extraction failed during import:", e);
+  }
 
   revalidatePath(`/boards/${parsed.data.boardId}`);
 

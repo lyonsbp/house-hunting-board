@@ -1,3 +1,4 @@
+import Link from "next/link";
 import { redirect } from "next/navigation";
 import {
   Card,
@@ -54,6 +55,12 @@ export default async function HomePage() {
           <CreateBoardForm />
         </CardContent>
       </Card>
+
+      <p className="text-center text-[11px] uppercase tracking-[0.18em] text-stone-500">
+        <Link href="/analytics" className="hover:text-stone-900">
+          Feature analytics →
+        </Link>
+      </p>
     </main>
   );
 }

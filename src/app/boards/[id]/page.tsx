@@ -209,6 +209,31 @@ export default async function BoardPage({
     (a, b) => b.scrapedAt.localeCompare(a.scrapedAt),
   );
 
+  // Pull LLM-extracted feature signals for every property surfaced on
+  // this board. `feature_signals` is globally readable to authenticated
+  // users; for anonymous viewers of a public board this query returns
+  // an empty array, which renders as "no chips" — acceptable v1.
+  if (listings.length > 0) {
+    const propertyIds = listings.map((l) => l.id);
+    const { data: signalRows } = await supabase
+      .from("feature_signals")
+      .select("property_id, feature, confidence")
+      .in("property_id", propertyIds)
+      .order("confidence", { ascending: false });
+    const byProperty = new Map<string, { feature: string; confidence: number }[]>();
+    for (const row of signalRows ?? []) {
+      const list = byProperty.get(row.property_id) ?? [];
+      list.push({
+        feature: row.feature,
+        confidence: typeof row.confidence === "number" ? row.confidence : 0,
+      });
+      byProperty.set(row.property_id, list);
+    }
+    for (const l of listings) {
+      l.features = byProperty.get(l.id) ?? [];
+    }
+  }
+
   // Pre-sign image URLs server-side. Always go through the admin client so
   // anonymous viewers of a public board can load images — the storage
   // bucket's RLS policies are authenticated-only, but signed URLs bypass
