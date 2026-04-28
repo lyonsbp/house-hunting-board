@@ -36,16 +36,24 @@ export default async function RootLayout({
     >
       <body className="bg-background text-foreground flex min-h-full flex-col font-sans">
         <header className="border-divider border-b">
-          <div className="mx-auto flex max-w-5xl items-center justify-between px-4 py-3">
+          <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3">
             <Link href="/" className="text-sm font-semibold">
               House Hunting Board
             </Link>
             {user && (
-              <form action="/auth/sign-out" method="post">
-                <Button type="submit" variant="ghost" size="sm">
-                  Sign out
-                </Button>
-              </form>
+              <nav className="flex items-center gap-3">
+                <Link
+                  href="/analytics"
+                  className="text-[11px] uppercase tracking-[0.18em] text-stone-500 hover:text-stone-900"
+                >
+                  Analytics
+                </Link>
+                <form action="/auth/sign-out" method="post">
+                  <Button type="submit" variant="ghost" size="sm">
+                    Sign out
+                  </Button>
+                </form>
+              </nav>
             )}
           </div>
         </header>
