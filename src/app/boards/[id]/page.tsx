@@ -217,22 +217,66 @@ export default async function BoardPage({
   // an empty array, which renders as "no chips" — acceptable v1.
   if (listings.length > 0) {
     const propertyIds = listings.map((l) => l.id);
-    const { data: signalRows } = await supabase
-      .from("feature_signals")
-      .select("property_id, feature, confidence")
-      .in("property_id", propertyIds)
-      .order("confidence", { ascending: false });
-    const byProperty = new Map<string, { feature: string; confidence: number }[]>();
+    const [{ data: signalRows }, { data: snapshotRows }] = await Promise.all([
+      supabase
+        .from("feature_signals")
+        .select("property_id, feature, confidence")
+        .in("property_id", propertyIds)
+        .order("confidence", { ascending: false }),
+      supabase
+        .from("property_snapshots")
+        .select("property_id, list_price, sold_price, status, scraped_at")
+        .in("property_id", propertyIds)
+        .order("scraped_at", { ascending: false }),
+    ]);
+
+    const featuresByProperty = new Map<string, { feature: string; confidence: number }[]>();
     for (const row of signalRows ?? []) {
-      const list = byProperty.get(row.property_id) ?? [];
+      const list = featuresByProperty.get(row.property_id) ?? [];
       list.push({
         feature: row.feature,
         confidence: typeof row.confidence === "number" ? row.confidence : 0,
       });
-      byProperty.set(row.property_id, list);
+      featuresByProperty.set(row.property_id, list);
     }
+
+    // Pick the prior snapshot per property — the most recent one whose
+    // values differ from the live property. Single pass since rows are
+    // already sorted desc.
+    type Snap = {
+      list_price: number | null;
+      sold_price: number | null;
+      status: string | null;
+      scraped_at: string;
+    };
+    const priorByProperty = new Map<string, Snap>();
+    const seenForProperty = new Map<string, number>();
+    for (const row of snapshotRows ?? []) {
+      const seen = seenForProperty.get(row.property_id) ?? 0;
+      seenForProperty.set(row.property_id, seen + 1);
+      // The first snapshot seen per property is the most recent (matches the
+      // current property values); we want the next one back as the "prior".
+      if (seen === 1 && !priorByProperty.has(row.property_id)) {
+        priorByProperty.set(row.property_id, {
+          list_price: row.list_price,
+          sold_price: row.sold_price,
+          status: row.status,
+          scraped_at: row.scraped_at,
+        });
+      }
+    }
+
     for (const l of listings) {
-      l.features = byProperty.get(l.id) ?? [];
+      l.features = featuresByProperty.get(l.id) ?? [];
+      const prior = priorByProperty.get(l.id);
+      if (prior) {
+        l.priorSnapshot = {
+          listPrice: prior.list_price,
+          soldPrice: prior.sold_price,
+          status: prior.status,
+          scrapedAt: prior.scraped_at,
+        };
+      }
     }
   }
 

@@ -238,6 +238,10 @@ describe("commitListingImport", () => {
       if (table === "properties") {
         return { upsert: vi.fn().mockReturnValue(propertyUpsert) };
       }
+      if (table === "property_snapshots") {
+        // Phase-B: import always writes a baseline snapshot via admin.
+        return { insert: vi.fn().mockResolvedValue({ error: null }) };
+      }
       throw new Error(`unexpected admin table ${table}`);
     });
 

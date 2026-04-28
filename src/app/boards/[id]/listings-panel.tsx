@@ -4,11 +4,19 @@ import { useState, useTransition } from "react";
 
 import { FeatureCohortPopover } from "./feature-cohort-popover";
 import { extractFeaturesForProperty } from "./feature-actions";
+import { refreshListing } from "./refresh-listing-actions";
 
 export type ImportedListingFeature = {
   feature: string;
   /** 0..1 — model's confidence that the feature applies. */
   confidence: number;
+};
+
+export type PriorSnapshot = {
+  listPrice: number | null;
+  soldPrice: number | null;
+  status: string | null;
+  scrapedAt: string;
 };
 
 export type ImportedListing = {
@@ -31,6 +39,11 @@ export type ImportedListing = {
   features?: ImportedListingFeature[];
   /** Metro name from metroForZip(zip), or null when ZIP is unknown. */
   metro: string | null;
+  /**
+   * Most recent property_snapshots row prior to the current state.
+   * Present only when the listing has been refreshed at least once.
+   */
+  priorSnapshot?: PriorSnapshot;
 };
 
 export function ListingsPanel({ listings }: { listings: ImportedListing[] }) {
@@ -64,7 +77,9 @@ export function ListingsPanel({ listings }: { listings: ImportedListing[] }) {
 
 function ListingRow({ listing }: { listing: ImportedListing }) {
   const [pending, startTransition] = useTransition();
+  const [refreshPending, startRefreshTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const [refreshError, setRefreshError] = useState<string | null>(null);
 
   function reextract() {
     setError(null);
@@ -74,7 +89,25 @@ function ListingRow({ listing }: { listing: ImportedListing }) {
     });
   }
 
-  return <ListingRowInner listing={listing} pending={pending} error={error} onReextract={reextract} />;
+  function refresh() {
+    setRefreshError(null);
+    startRefreshTransition(async () => {
+      const res = await refreshListing({ propertyId: listing.id });
+      if ("error" in res) setRefreshError(res.error);
+    });
+  }
+
+  return (
+    <ListingRowInner
+      listing={listing}
+      pending={pending}
+      error={error}
+      onReextract={reextract}
+      refreshPending={refreshPending}
+      refreshError={refreshError}
+      onRefresh={refresh}
+    />
+  );
 }
 
 function ListingRowInner({
@@ -82,11 +115,17 @@ function ListingRowInner({
   pending,
   error,
   onReextract,
+  refreshPending,
+  refreshError,
+  onRefresh,
 }: {
   listing: ImportedListing;
   pending: boolean;
   error: string | null;
   onReextract: () => void;
+  refreshPending: boolean;
+  refreshError: string | null;
+  onRefresh: () => void;
 }) {
   const stats: string[] = [];
   if (listing.bedrooms !== null) stats.push(`${listing.bedrooms} bd`);
@@ -119,6 +158,16 @@ function ListingRowInner({
   const visibleFeatures = featureList.slice(0, 5);
   const extraFeatures = Math.max(0, featureList.length - visibleFeatures.length);
 
+  const priorHeadline = priorHeadlineAmount(listing);
+  const headlineDelta =
+    headlineAmount !== null && priorHeadline !== null && priorHeadline !== headlineAmount
+      ? headlineAmount - priorHeadline
+      : null;
+  const statusChanged =
+    !!listing.priorSnapshot &&
+    (listing.priorSnapshot.status ?? null) !== (listing.status ?? null) &&
+    listing.priorSnapshot.status !== null;
+
   return (
     <li className="flex flex-col gap-2 py-3">
       <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
@@ -131,6 +180,30 @@ function ListingRowInner({
           </p>
           <p className="mt-0.5 text-[11px] uppercase tracking-wide text-stone-500">
             {priceLabel ? <span className="mr-2">{priceLabel}</span> : null}
+            {headlineDelta !== null && listing.priorSnapshot && (
+              <span
+                className={`mr-2 normal-case tracking-normal ${
+                  headlineDelta < 0 ? "text-emerald-700" : "text-red-700"
+                }`}
+                title={`Previous: $${(priorHeadline ?? 0).toLocaleString()} on ${formatScraped(
+                  listing.priorSnapshot.scrapedAt,
+                )}`}
+              >
+                {headlineDelta < 0 ? "↓" : "↑"}$
+                {Math.abs(headlineDelta).toLocaleString()} since{" "}
+                {formatScraped(listing.priorSnapshot.scrapedAt)}
+              </span>
+            )}
+            {statusChanged && listing.priorSnapshot && (
+              <span
+                className="mr-2 normal-case tracking-normal text-amber-700"
+                title={`Was ${listing.priorSnapshot.status} on ${formatScraped(
+                  listing.priorSnapshot.scrapedAt,
+                )}`}
+              >
+                {listing.priorSnapshot.status} → {listing.status}
+              </span>
+            )}
             {stats.length > 0 ? stats.join(" · ") : null}
           </p>
         </div>
@@ -152,11 +225,24 @@ function ListingRowInner({
           >
             {host} ↗
           </a>
+          <button
+            type="button"
+            onClick={onRefresh}
+            disabled={refreshPending}
+            className="text-stone-400 hover:text-stone-700 disabled:opacity-50"
+            title="Re-scrape the source listing for fresh price + status"
+          >
+            {refreshPending ? "Refreshing…" : "Refresh"}
+          </button>
           <time dateTime={listing.scrapedAt} className="text-stone-400">
             {formatScraped(listing.scrapedAt)}
           </time>
         </div>
       </div>
+
+      {refreshError && (
+        <p className="text-[11px] text-red-700">{refreshError}</p>
+      )}
 
       {(featureList.length > 0 || pending || error) && (
         <div className="flex flex-wrap items-center gap-1.5">
@@ -194,6 +280,20 @@ function ListingRowInner({
       )}
     </li>
   );
+}
+
+/**
+ * Match the headline-amount logic used for `priceLabel` so the delta
+ * compares apples-to-apples — sold price wins over list price both for
+ * the current row and for the prior snapshot it's compared against.
+ */
+function priorHeadlineAmount(listing: ImportedListing): number | null {
+  const prior = listing.priorSnapshot;
+  if (!prior) return null;
+  const currentIsSold =
+    !!listing.status && /sold|closed/i.test(listing.status);
+  if (currentIsSold) return prior.soldPrice ?? prior.listPrice ?? null;
+  return prior.listPrice ?? prior.soldPrice ?? null;
 }
 
 function formatScraped(iso: string): string {

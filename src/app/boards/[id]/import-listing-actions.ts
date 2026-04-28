@@ -297,6 +297,18 @@ export async function commitListingImport(
   }
   const propertyId = propertyRow.id as string;
 
+  // Snapshot the values we just upserted so future refreshes have a
+  // baseline to compute deltas against. Failure here is non-fatal — we
+  // can still complete the import, the next refresh just won't see a
+  // history entry.
+  await admin.from("property_snapshots").insert({
+    property_id: propertyId,
+    list_price: cachedPreview.property.listPrice ?? null,
+    sold_price: cachedPreview.property.soldPrice ?? null,
+    status: cachedPreview.property.status ?? null,
+    scraped_at: cachedPreview.scrapedAt,
+  });
+
   // Bounded-parallel image download + upload. Each entry retains its
   // position in the original selection so the saved `image_index` metadata
   // matches the order the user picked.
