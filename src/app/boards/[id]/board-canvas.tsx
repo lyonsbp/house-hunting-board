@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
-  PointerSensor,
+  MouseSensor,
+  TouchSensor,
   closestCenter,
   useSensor,
   useSensors,
@@ -122,8 +123,15 @@ export function BoardCanvas({
   const [optimistic, setOptimistic] = useState<Lane[] | null>(null);
   const displayLanes = optimistic ?? lanes;
 
+  // Split sensors so touch scrolling still works on phones. Mouse drags
+  // start after a tiny 6px move (instant feel on desktop); touch drags
+  // require a 250ms hold so a regular tap-and-flick scrolls the page
+  // instead of grabbing a card.
   const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 250, tolerance: 8 },
+    }),
   );
 
   function findLaneOf(sortableId: string): {

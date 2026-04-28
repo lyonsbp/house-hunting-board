@@ -233,7 +233,7 @@ export default async function BoardPage({
   }
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-col gap-10 px-6 py-10">
+    <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
       <header className="flex flex-col gap-1">
         <p
           className="text-[10px] uppercase tracking-[0.22em] text-amber-700/80"
@@ -243,7 +243,7 @@ export default async function BoardPage({
         </p>
         <h1
           style={{ fontFamily: SERIF }}
-          className="text-4xl font-normal leading-tight text-stone-900"
+          className="text-3xl font-normal leading-tight text-stone-900 sm:text-4xl"
         >
           {board.name}
         </h1>

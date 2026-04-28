@@ -28,13 +28,8 @@ export class GeminiImageEditor implements ImageEditor {
   readonly model: ImageEditModel = "gemini-2.5-flash-image";
 
   async edit(req: ImageEditRequest): Promise<ImageEditResult[]> {
-    if (req.variants !== 1) {
-      // Remix (variants > 1) is wired separately so we can fan out in
-      // parallel and surface partial-failure UX. For now keep the editor
-      // contract one-call-per-variant.
-      throw new Error(
-        `GeminiImageEditor: variants=${req.variants} not supported here; call edit() once per variant.`,
-      );
+    if (req.variants < 1) {
+      throw new Error(`GeminiImageEditor: variants must be >= 1`);
     }
 
     const apiKey = process.env.GEMINI_API_KEY;
@@ -43,90 +38,139 @@ export class GeminiImageEditor implements ImageEditor {
     }
     const modelName = process.env.GEMINI_IMAGE_MODEL ?? DEFAULT_MODEL;
 
+    // Load the source bytes once so each parallel call can reuse them
+    // instead of re-fetching the URL N times.
     const sourceBytes = await loadSourceBytes(req.source);
     const sourceMime = await loadSourceMime(req.source);
+    const sourceB64 = bytesToBase64(sourceBytes);
 
-    const body = {
-      contents: [
-        {
-          role: "user",
-          parts: [
-            { text: req.prompt },
-            {
-              inline_data: {
-                mime_type: sourceMime,
-                data: bytesToBase64(sourceBytes),
-              },
-            },
-          ],
-        },
-      ],
-      generationConfig: {
-        responseModalities: ["IMAGE"],
-      },
-    };
+    // Fan out: Gemini's image-gen endpoint returns one image per call, so
+    // for variants > 1 we issue N parallel calls. Promise.allSettled so a
+    // single safety-filter rejection or timeout doesn't kill the others.
+    const settled = await Promise.allSettled(
+      Array.from({ length: req.variants }, (_unused, i) =>
+        runOne({
+          apiKey,
+          modelName,
+          sourceB64,
+          sourceMime,
+          prompt: req.prompt,
+          variantIndex: i,
+        }),
+      ),
+    );
 
-    const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
-
-    let res: Response;
-    try {
-      res = await fetch(
-        `${ENDPOINT_BASE}/${modelName}:generateContent?key=${encodeURIComponent(apiKey)}`,
-        {
-          method: "POST",
-          signal: ctrl.signal,
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
-    } catch (cause) {
-      clearTimeout(timer);
-      if (cause instanceof Error && cause.name === "AbortError") {
-        throw new Error("Gemini request timed out");
+    const results: ImageEditResult[] = [];
+    const errors: string[] = [];
+    for (const r of settled) {
+      if (r.status === "fulfilled") {
+        results.push(r.value);
+      } else {
+        errors.push(
+          r.reason instanceof Error ? r.reason.message : String(r.reason),
+        );
       }
-      throw cause;
     }
-    clearTimeout(timer);
 
-    if (!res.ok) {
-      const detail = await res.text().catch(() => "");
+    // If every variant failed, surface a single error rather than returning
+    // an empty array. Partial failures are reported via the empty slots —
+    // callers can compare results.length to the requested variants count.
+    if (results.length === 0) {
       throw new Error(
-        `Gemini ${modelName} returned ${res.status}${detail ? `: ${truncate(detail, 300)}` : ""}`,
+        `All ${req.variants} variant${req.variants === 1 ? "" : "s"} failed${errors[0] ? `: ${errors[0]}` : ""}`,
       );
     }
 
-    const json = (await res.json()) as GeminiResponse;
-    const candidate = json.candidates?.[0];
-    if (!candidate) {
-      throw new Error("Gemini response had no candidates");
-    }
-
-    const imagePart = candidate.content?.parts?.find(isInlinePart);
-    if (!imagePart) {
-      // The API blocked or returned text-only. Surface the text so the user
-      // sees *why* — common when the prompt trips a safety filter.
-      const textPart = candidate.content?.parts?.find(isTextPart);
-      const reason = candidate.finishReason ?? "no image returned";
-      const detail = textPart?.text ? `: ${truncate(textPart.text, 200)}` : "";
-      throw new Error(`Gemini returned no image (${reason})${detail}`);
-    }
-
-    const mimeType = imagePart.inlineData.mimeType ?? "image/png";
-    const bytes = base64ToBytes(imagePart.inlineData.data);
-
-    return [
-      {
-        variantIndex: 0,
-        image: { mimeType, bytes },
-        costCents: COST_CENTS_PER_IMAGE,
-        providerMeta: {
-          model: modelName,
-          finishReason: candidate.finishReason,
-        },
-      },
-    ];
+    return results;
   }
+}
+
+async function runOne(args: {
+  apiKey: string;
+  modelName: string;
+  sourceB64: string;
+  sourceMime: string;
+  prompt: string;
+  variantIndex: number;
+}): Promise<ImageEditResult> {
+  const body = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: args.prompt },
+          {
+            inline_data: {
+              mime_type: args.sourceMime,
+              data: args.sourceB64,
+            },
+          },
+        ],
+      },
+    ],
+    generationConfig: {
+      responseModalities: ["IMAGE"],
+    },
+  };
+
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+
+  let res: Response;
+  try {
+    res = await fetch(
+      `${ENDPOINT_BASE}/${args.modelName}:generateContent?key=${encodeURIComponent(args.apiKey)}`,
+      {
+        method: "POST",
+        signal: ctrl.signal,
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      },
+    );
+  } catch (cause) {
+    clearTimeout(timer);
+    if (cause instanceof Error && cause.name === "AbortError") {
+      throw new Error("Gemini request timed out");
+    }
+    throw cause;
+  }
+  clearTimeout(timer);
+
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `Gemini ${args.modelName} returned ${res.status}${detail ? `: ${truncate(detail, 300)}` : ""}`,
+    );
+  }
+
+  const json = (await res.json()) as GeminiResponse;
+  const candidate = json.candidates?.[0];
+  if (!candidate) {
+    throw new Error("Gemini response had no candidates");
+  }
+
+  const imagePart = candidate.content?.parts?.find(isInlinePart);
+  if (!imagePart) {
+    // The API blocked or returned text-only. Surface the text so the user
+    // sees *why* — common when the prompt trips a safety filter.
+    const textPart = candidate.content?.parts?.find(isTextPart);
+    const reason = candidate.finishReason ?? "no image returned";
+    const detail = textPart?.text ? `: ${truncate(textPart.text, 200)}` : "";
+    throw new Error(`Gemini returned no image (${reason})${detail}`);
+  }
+
+  const mimeType = imagePart.inlineData.mimeType ?? "image/png";
+  const bytes = base64ToBytes(imagePart.inlineData.data);
+
+  return {
+    variantIndex: args.variantIndex,
+    image: { mimeType, bytes },
+    costCents: COST_CENTS_PER_IMAGE,
+    providerMeta: {
+      model: args.modelName,
+      finishReason: candidate.finishReason,
+    },
+  };
 }
 
 async function loadSourceBytes(src: ImageEditRequest["source"]): Promise<Uint8Array> {

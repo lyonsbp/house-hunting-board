@@ -31,23 +31,30 @@ export function AddArtifact({ boardId }: { boardId: string }) {
 
   return (
     <div className="space-y-4">
-      <div className="inline-flex gap-1 rounded-full border border-stone-200 bg-white p-1 shadow-sm">
-        {KINDS.map((k) => (
-          <button
-            key={k.id}
-            type="button"
-            onClick={() => setActive(k.id)}
-            aria-pressed={active === k.id}
-            className={`rounded-full px-4 py-1.5 text-[10px] font-medium uppercase transition-colors ${
-              active === k.id
-                ? "bg-stone-900 text-stone-50"
-                : "text-stone-500 hover:text-stone-900"
-            }`}
-            style={{ letterSpacing: "0.18em" }}
-          >
-            {k.label}
-          </button>
-        ))}
+      <div
+        // -mx-1 + px-1 + overflow-x-auto lets the pill bar scroll
+        // horizontally on phones that can't fit all five tabs in a row,
+        // without breaking the rounded outline on wider screens.
+        className="-mx-4 overflow-x-auto px-4 sm:mx-0 sm:overflow-visible sm:px-0"
+      >
+        <div className="inline-flex w-max gap-1 rounded-full border border-stone-200 bg-white p-1 shadow-sm">
+          {KINDS.map((k) => (
+            <button
+              key={k.id}
+              type="button"
+              onClick={() => setActive(k.id)}
+              aria-pressed={active === k.id}
+              className={`whitespace-nowrap rounded-full px-3 py-1.5 text-[10px] font-medium uppercase transition-colors sm:px-4 ${
+                active === k.id
+                  ? "bg-stone-900 text-stone-50"
+                  : "text-stone-500 hover:text-stone-900"
+              }`}
+              style={{ letterSpacing: "0.18em" }}
+            >
+              {k.label}
+            </button>
+          ))}
+        </div>
       </div>
 
       <div>
