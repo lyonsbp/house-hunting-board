@@ -14,12 +14,18 @@
  * why this isn't a real causal effect estimate.
  */
 
+import { metroForZip } from "./metros";
+
 export type AnalyticsProperty = {
   id: string;
   /** Sold price wins over list price; either is acceptable input. */
   list_price: number | null;
   sold_price: number | null;
   sqft: number | null;
+  /** Geographic fields for the metro filter. */
+  city?: string | null;
+  state?: string | null;
+  zip?: string | null;
 };
 
 export type AnalyticsSignal = {
@@ -71,14 +77,23 @@ export function median(values: number[]): number | null {
  * Build a per-feature cohort table. Skips properties without a usable
  * price-per-sqft. A property is "with" a feature when it has at least
  * one feature_signals row at or above the confidence threshold.
+ *
+ * `metro` (optional) restricts the input to properties whose ZIP maps
+ * to the given metro name via `metroForZip`. Properties outside any
+ * known metro are excluded when a filter is active.
  */
 export function buildCohortTable(
   properties: AnalyticsProperty[],
   signals: AnalyticsSignal[],
   features: readonly string[],
-  opts: { confidenceThreshold?: number } = {},
+  opts: { confidenceThreshold?: number; metro?: string | null } = {},
 ): CohortRow[] {
   const threshold = opts.confidenceThreshold ?? DEFAULT_CONFIDENCE_THRESHOLD;
+  const filteredProperties = opts.metro
+    ? filterByMetro(properties, opts.metro)
+    : properties;
+  // Operate on the filtered set going forward.
+  properties = filteredProperties;
 
   // Property id -> price/sqft (only for priced+sized properties).
   const ppsByProperty = new Map<string, number>();
@@ -120,9 +135,24 @@ export function buildCohortTable(
   });
 }
 
-/** Total priced properties — useful for the "dataset size: N" header. */
-export function pricedPropertyCount(properties: AnalyticsProperty[]): number {
+/**
+ * Total priced properties — useful for the "dataset size: N" header.
+ * Honors the same metro filter as `buildCohortTable` so the header N and
+ * the table cohort sizes stay consistent.
+ */
+export function pricedPropertyCount(
+  properties: AnalyticsProperty[],
+  opts: { metro?: string | null } = {},
+): number {
+  const scoped = opts.metro ? filterByMetro(properties, opts.metro) : properties;
   let n = 0;
-  for (const p of properties) if (pricePerSqft(p) !== null) n++;
+  for (const p of scoped) if (pricePerSqft(p) !== null) n++;
   return n;
+}
+
+function filterByMetro(
+  properties: AnalyticsProperty[],
+  metro: string,
+): AnalyticsProperty[] {
+  return properties.filter((p) => metroForZip(p.zip) === metro);
 }

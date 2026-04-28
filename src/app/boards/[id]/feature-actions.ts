@@ -5,6 +5,12 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { extractFeatures } from "@/lib/ai/feature-extractor";
+import {
+  buildCohortTable,
+  type AnalyticsProperty,
+  type AnalyticsSignal,
+  type CohortRow,
+} from "@/lib/analytics/cohort";
 import { getCurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -105,4 +111,70 @@ export async function runExtraction(
     revalidatePath(`/boards/${revalidateBoardId}`);
   }
   return { ok: true, written: features.length };
+}
+
+// ---------------------------------------------------------------------------
+// Drilldown: cohort delta for a single feature, optionally scoped to metro
+// ---------------------------------------------------------------------------
+
+const CohortInputSchema = z.object({
+  feature: z.string().min(1).max(120),
+  metro: z.string().max(120).nullable(),
+});
+
+/**
+ * One-row cohort delta for a single feature, used by the chip-drilldown
+ * popover on the listings panel. Reuses the same `buildCohortTable`
+ * helper as `/analytics` so the numbers match exactly. Reads the
+ * globally-readable `properties` and `feature_signals` tables — no auth
+ * gate beyond user-signed-in (we don't expose any per-board content).
+ */
+export async function getFeatureCohort(input: {
+  feature: string;
+  metro: string | null;
+}): Promise<{ row: CohortRow; totalPriced: number } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const parsed = CohortInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input." };
+  }
+  const { feature, metro } = parsed.data;
+
+  const supabase = await createClient();
+  const [{ data: propertyRows, error: pErr }, { data: signalRows, error: sErr }] =
+    await Promise.all([
+      supabase
+        .from("properties")
+        .select("id, list_price, sold_price, sqft, city, state, zip"),
+      supabase
+        .from("feature_signals")
+        .select("property_id, feature, confidence")
+        .eq("source", "llm-extract")
+        .eq("feature", feature),
+    ]);
+  if (pErr || sErr) {
+    return { error: pErr?.message ?? sErr?.message ?? "Couldn't load data." };
+  }
+
+  const properties: AnalyticsProperty[] = propertyRows ?? [];
+  const signals: AnalyticsSignal[] = signalRows ?? [];
+
+  const rows = buildCohortTable(properties, signals, [feature], { metro });
+  const row = rows[0]!;
+
+  // Mirror /analytics' header N: priced properties in this scope.
+  const totalPriced = properties.filter((p) => {
+    if (typeof p.sqft !== "number" || p.sqft <= 0) return false;
+    const price =
+      typeof p.sold_price === "number" && p.sold_price > 0
+        ? p.sold_price
+        : typeof p.list_price === "number" && p.list_price > 0
+          ? p.list_price
+          : null;
+    return price !== null;
+  }).length;
+
+  return { row, totalPriced };
 }

@@ -146,4 +146,50 @@ describe("pricedPropertyCount", () => {
     ];
     expect(pricedPropertyCount(props)).toBe(1);
   });
+
+  it("respects the metro filter when one is provided", () => {
+    const props: AnalyticsProperty[] = [
+      // Newport Beach — LA metro
+      { id: "la", sold_price: 1_000_000, list_price: null, sqft: 1000, zip: "92663" },
+      // Seattle metro
+      { id: "se", sold_price: 800_000, list_price: null, sqft: 1000, zip: "98101" },
+    ];
+    expect(
+      pricedPropertyCount(props, {
+        metro: "Los Angeles-Long Beach-Anaheim, CA",
+      }),
+    ).toBe(1);
+  });
+});
+
+describe("buildCohortTable with metro filter", () => {
+  const properties: AnalyticsProperty[] = [
+    // LA metro, has pool, 1000/sqft
+    { id: "la1", sold_price: 1_000_000, list_price: null, sqft: 1000, zip: "92663" },
+    // LA metro, no pool, 600/sqft
+    { id: "la2", sold_price: 600_000, list_price: null, sqft: 1000, zip: "90210" },
+    // Seattle metro, has pool, 5000/sqft (would dominate without filter)
+    { id: "se1", sold_price: 5_000_000, list_price: null, sqft: 1000, zip: "98101" },
+  ];
+  const signals: AnalyticsSignal[] = [
+    { property_id: "la1", feature: "pool", confidence: 0.9 },
+    { property_id: "se1", feature: "pool", confidence: 0.9 },
+  ];
+
+  it("scopes the cohort to the chosen metro and ignores other regions", () => {
+    const rows = buildCohortTable(properties, signals, ["pool"], {
+      metro: "Los Angeles-Long Beach-Anaheim, CA",
+    });
+    const pool = rows[0]!;
+    expect(pool.n).toBe(1);
+    expect(pool.medianWith).toBe(1000);
+    expect(pool.medianWithout).toBe(600);
+    expect(pool.deltaPerSqft).toBe(400);
+  });
+
+  it("returns the unfiltered cohort when metro is null/undefined", () => {
+    const rows = buildCohortTable(properties, signals, ["pool"]);
+    const pool = rows[0]!;
+    expect(pool.n).toBe(2); // both pool properties
+  });
 });

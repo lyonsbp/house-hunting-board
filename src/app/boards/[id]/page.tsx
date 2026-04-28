@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { Card, CardContent } from "@heroui/react";
 
+import { metroForZip } from "@/lib/analytics/metros";
 import { getCurrentUser } from "@/lib/auth";
 import { toArtifact, type ArtifactRow } from "@/lib/artifacts";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -203,6 +204,7 @@ export default async function BoardPage({
       status: p.status,
       scrapedAt: p.scraped_at,
       photoCount: 1,
+      metro: metroForZip(p.zip),
     });
   }
   const listings: ImportedListing[] = [...listingsById.values()].sort(

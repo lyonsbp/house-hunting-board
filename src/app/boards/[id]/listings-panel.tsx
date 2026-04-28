@@ -2,6 +2,7 @@
 
 import { useState, useTransition } from "react";
 
+import { FeatureCohortPopover } from "./feature-cohort-popover";
 import { extractFeaturesForProperty } from "./feature-actions";
 
 export type ImportedListingFeature = {
@@ -28,6 +29,8 @@ export type ImportedListing = {
   scrapedAt: string;
   photoCount: number;
   features?: ImportedListingFeature[];
+  /** Metro name from metroForZip(zip), or null when ZIP is unknown. */
+  metro: string | null;
 };
 
 export function ListingsPanel({ listings }: { listings: ImportedListing[] }) {
@@ -158,13 +161,12 @@ function ListingRowInner({
       {(featureList.length > 0 || pending || error) && (
         <div className="flex flex-wrap items-center gap-1.5">
           {visibleFeatures.map((f) => (
-            <span
+            <FeatureChip
               key={f.feature}
-              title={`Confidence ${(f.confidence * 100).toFixed(0)}%`}
-              className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-900 ring-1 ring-amber-200"
-            >
-              {f.feature}
-            </span>
+              feature={f.feature}
+              confidence={f.confidence}
+              metro={listing.metro}
+            />
           ))}
           {extraFeatures > 0 && (
             <span className="text-[10px] text-stone-400">+{extraFeatures}</span>
@@ -202,4 +204,35 @@ function formatScraped(iso: string): string {
     month: "short",
     day: "numeric",
   });
+}
+
+function FeatureChip({
+  feature,
+  confidence,
+  metro,
+}: {
+  feature: string;
+  confidence: number;
+  metro: string | null;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        title={`Confidence ${(confidence * 100).toFixed(0)}% — click for cohort delta`}
+        className="rounded-full bg-amber-50 px-2 py-0.5 text-[10px] font-medium text-amber-900 ring-1 ring-amber-200 transition-colors hover:bg-amber-100 hover:ring-amber-300"
+      >
+        {feature}
+      </button>
+      {open && (
+        <FeatureCohortPopover
+          feature={feature}
+          metro={metro}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
 }

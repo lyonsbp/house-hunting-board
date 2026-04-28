@@ -12,14 +12,25 @@ import {
 import { getCurrentUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
 
+import { MetroFilter } from "./metro-filter";
+
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
 
 const LOW_N_THRESHOLD = 5;
 
-export default async function AnalyticsPage() {
+export default async function AnalyticsPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ metro?: string }>;
+}) {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
+
+  const { metro: metroParam } = await searchParams;
+  const metro = typeof metroParam === "string" && metroParam.length > 0
+    ? metroParam
+    : null;
 
   const supabase = await createClient();
 
@@ -30,7 +41,7 @@ export default async function AnalyticsPage() {
   const [{ data: propertyRows }, { data: signalRows }] = await Promise.all([
     supabase
       .from("properties")
-      .select("id, list_price, sold_price, sqft"),
+      .select("id, list_price, sold_price, sqft, city, state, zip"),
     supabase
       .from("feature_signals")
       .select("property_id, feature, confidence")
@@ -40,8 +51,8 @@ export default async function AnalyticsPage() {
   const properties: AnalyticsProperty[] = propertyRows ?? [];
   const signals: AnalyticsSignal[] = signalRows ?? [];
 
-  const totalPriced = pricedPropertyCount(properties);
-  const rows = buildCohortTable(properties, signals, FEATURE_TAXONOMY)
+  const totalPriced = pricedPropertyCount(properties, { metro });
+  const rows = buildCohortTable(properties, signals, FEATURE_TAXONOMY, { metro })
     .filter((r) => r.n > 0)
     .sort((a, b) => {
       // Sort by absolute delta desc; nulls last.
@@ -49,6 +60,8 @@ export default async function AnalyticsPage() {
       const db = b.deltaPerSqft === null ? -Infinity : Math.abs(b.deltaPerSqft);
       return db - da;
     });
+
+  const scopeLabel = metro ? metro : "all metros";
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
@@ -72,7 +85,7 @@ export default async function AnalyticsPage() {
         </h1>
         <p className="mt-2 max-w-prose text-sm text-stone-600">
           Median price-per-sqft across {totalPriced.toLocaleString()} priced
-          properties in the dataset, split by whether each feature is present.
+          properties in {scopeLabel}, split by whether each feature is present.
           This is a simple cohort delta, not a causal effect — features
           correlate with each other (a pool listing also tends to have a deck),
           so deltas overstate any single feature&apos;s contribution. Treat as
@@ -81,14 +94,22 @@ export default async function AnalyticsPage() {
         </p>
       </header>
 
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <MetroFilter />
+        <p className="text-[11px] uppercase tracking-wide text-stone-400">
+          {totalPriced.toLocaleString()} priced properties
+        </p>
+      </div>
+
       <Card>
         <CardContent>
           {totalPriced === 0 ? (
-            <EmptyState />
+            <EmptyState scoped={!!metro} />
           ) : rows.length === 0 ? (
             <p className="text-sm text-stone-500">
-              No feature signals yet. Import some listings and the extractor
-              will populate this page next time around.
+              No feature signals yet for this scope. Import some listings (or
+              widen the metro filter) and the extractor will populate this
+              page.
             </p>
           ) : (
             <CohortTable rows={rows} />
@@ -161,15 +182,16 @@ function CohortTable({
   );
 }
 
-function EmptyState() {
+function EmptyState({ scoped }: { scoped: boolean }) {
   return (
     <div className="flex flex-col items-center gap-3 py-12 text-center">
       <p
         style={{ fontFamily: SERIF }}
         className="max-w-sm text-lg italic text-stone-500"
       >
-        Nothing to compare yet. Import a few Redfin or Zillow listings and the
-        feature extractor will fill this up.
+        {scoped
+          ? "No priced properties in this metro yet. Try a different one, or import some listings."
+          : "Nothing to compare yet. Import a few Redfin or Zillow listings and the feature extractor will fill this up."}
       </p>
     </div>
   );
