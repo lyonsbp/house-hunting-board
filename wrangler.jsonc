@@ -36,10 +36,15 @@
 		// because Next.js inlines NEXT_PUBLIC_* values into the client bundle.
 		"NEXT_PUBLIC_SUPABASE_URL": "https://vubqdsoczdzheuplfutd.supabase.co",
 		"NEXT_PUBLIC_SUPABASE_ANON_KEY": "sb_publishable_pfWvBtM5d8xA3jucM7_e_w_hYMbxHGA",
-		"NEXT_PUBLIC_SITE_URL": "https://house-hunting-board.lyonsbp.workers.dev"
+		"NEXT_PUBLIC_SITE_URL": "https://house-hunting-board.lyonsbp.workers.dev",
+		// Listing-import quota knobs — server-only, configurable. Read by the
+		// previewListing action via process.env in the worker runtime.
+		"LISTING_SCRAPE_DAILY_LIMIT": "10",
+		"SUPERADMIN_EMAILS": "brandonl.4231@gmail.com,siomaramlopez1994@gmail.com"
 	}
 	// Secrets (do NOT commit): set with `wrangler secret put <NAME>`
 	//   SUPABASE_SERVICE_ROLE_KEY  — server-only Supabase admin key (sb_secret_...)
+	//   SCRAPFLY_API_KEY           — Zillow PerimeterX bypass via Scrapfly ASP
 	//   GEMINI_API_KEY             — image edit / remix (M3, not yet wired)
 	//   FLUX_API_KEY               — fallback image model (M3, not yet wired)
 }

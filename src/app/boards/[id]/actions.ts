@@ -701,3 +701,47 @@ export async function inviteMember(
     ? { status: "added", email }
     : { status: "sent", email };
 }
+
+// ---------------------------------------------------------------------------
+// Sharing — public read-only links
+// ---------------------------------------------------------------------------
+
+const SetVisibilitySchema = z.object({
+  boardId: z.string().uuid(),
+  isPublic: z.boolean(),
+});
+
+export async function setBoardVisibility(input: {
+  boardId: string;
+  isPublic: boolean;
+}): Promise<{ ok: true; isPublic: boolean } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated" };
+  const parsed = SetVisibilitySchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const supabase = await createClient();
+  // Owner check up front for a friendlier error than RLS would give. The
+  // boards UPDATE policy is editor+ but flipping visibility is owner-only —
+  // enforce that here.
+  const { data: membership } = await supabase
+    .from("board_members")
+    .select("role")
+    .eq("board_id", parsed.data.boardId)
+    .eq("user_id", user.sub)
+    .maybeSingle();
+  if (membership?.role !== "owner") {
+    return { error: "Only the board owner can change sharing." };
+  }
+
+  const { error } = await supabase
+    .from("boards")
+    .update({ is_public: parsed.data.isPublic })
+    .eq("id", parsed.data.boardId);
+  if (error) return { error: error.message };
+
+  revalidatePath(`/boards/${parsed.data.boardId}`);
+  return { ok: true, isPublic: parsed.data.isPublic };
+}

@@ -22,9 +22,11 @@ export type Category = { id: string; name: string };
 export function CategoriesSection({
   boardId,
   categories,
+  canEdit,
 }: {
   boardId: string;
   categories: Category[];
+  canEdit: boolean;
 }) {
   const [state, formAction, pending] = useActionState(
     createCategory,
@@ -53,46 +55,70 @@ export function CategoriesSection({
               className="border-default-200 flex items-center gap-2 rounded-full border px-3 py-1 text-sm"
             >
               <span>{cat.name}</span>
-              <form action={deleteCategory}>
-                <input type="hidden" name="id" value={cat.id} />
-                <input type="hidden" name="boardId" value={boardId} />
-                <button
-                  type="submit"
-                  aria-label={`Delete ${cat.name}`}
-                  className="text-default-400 hover:text-danger text-xs"
-                >
-                  ×
-                </button>
-              </form>
+              {canEdit && (
+                <form action={deleteCategory}>
+                  <input type="hidden" name="id" value={cat.id} />
+                  <input type="hidden" name="boardId" value={boardId} />
+                  <button
+                    type="submit"
+                    aria-label={`Delete ${cat.name}`}
+                    className="text-default-400 hover:text-danger text-xs"
+                  >
+                    ×
+                  </button>
+                </form>
+              )}
             </li>
           ))}
         </ul>
       ) : (
         <p className="text-sm opacity-60">
-          No categories yet. Add one to start grouping artifacts.
+          No categories yet{canEdit ? ". Add one to start grouping artifacts." : "."}
         </p>
       )}
 
-      <form
-        ref={formRef}
-        action={formAction}
-        className="flex items-end gap-2"
-      >
-        <input type="hidden" name="boardId" value={boardId} />
-        <TextField
-          name="name"
-          isRequired
-          isInvalid={state.status === "error"}
-          className="flex-1"
-        >
-          <Label>New category</Label>
-          <Input placeholder="e.g. Kitchens" maxLength={80} />
-          {state.status === "error" && <FieldError>{state.message}</FieldError>}
-        </TextField>
-        <Button type="submit" variant="primary" isDisabled={pending}>
-          {pending ? "Adding…" : "Add"}
-        </Button>
-      </form>
+      {canEdit && (
+        <CategoryForm
+          formRef={formRef}
+          formAction={formAction}
+          boardId={boardId}
+          state={state}
+          pending={pending}
+        />
+      )}
     </div>
+  );
+}
+
+function CategoryForm({
+  formRef,
+  formAction,
+  boardId,
+  state,
+  pending,
+}: {
+  formRef: React.RefObject<HTMLFormElement | null>;
+  formAction: (fd: FormData) => void;
+  boardId: string;
+  state: CreateCategoryState;
+  pending: boolean;
+}) {
+  return (
+    <form ref={formRef} action={formAction} className="flex items-end gap-2">
+      <input type="hidden" name="boardId" value={boardId} />
+      <TextField
+        name="name"
+        isRequired
+        isInvalid={state.status === "error"}
+        className="flex-1"
+      >
+        <Label>New category</Label>
+        <Input placeholder="e.g. Kitchens" maxLength={80} />
+        {state.status === "error" && <FieldError>{state.message}</FieldError>}
+      </TextField>
+      <Button type="submit" variant="primary" isDisabled={pending}>
+        {pending ? "Adding…" : "Add"}
+      </Button>
+    </form>
   );
 }

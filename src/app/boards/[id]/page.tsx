@@ -1,4 +1,4 @@
-import { notFound, redirect } from "next/navigation";
+import { notFound } from "next/navigation";
 import { Card, CardContent } from "@heroui/react";
 
 import { getCurrentUser } from "@/lib/auth";
@@ -12,7 +12,9 @@ import { CategoriesSection } from "./categories-section";
 import { InvitesSection, type Member } from "./invites-section";
 import { ListingsPanel, type ImportedListing } from "./listings-panel";
 import { PasteImageListener } from "./paste-image-listener";
+import { ReadOnlyBanner } from "./read-only-banner";
 import { RealtimeBridge } from "./realtime-bridge";
+import { SharingSection } from "./sharing-section";
 
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
@@ -22,15 +24,18 @@ export default async function BoardPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  // Anonymous viewers ARE allowed when the board is public, so we don't
+  // redirect to /login here. RLS on `boards` returns null for private
+  // boards anonymous users can't see, which we render as 404.
   const user = await getCurrentUser();
-  if (!user) redirect("/login");
+  const userId = user?.sub ?? null;
 
   const { id } = await params;
 
   const supabase = await createClient();
   const { data: board } = await supabase
     .from("boards")
-    .select("id, name")
+    .select("id, name, is_public")
     .eq("id", id)
     .maybeSingle();
 
@@ -67,10 +72,9 @@ export default async function BoardPage({
       .select("artifact_id, tag_id, artifacts!inner(board_id)")
       .eq("artifacts.board_id", id),
     supabase.from("tags").select("id, name").eq("board_id", id),
-    supabase
-      .from("board_members")
-      .select("user_id, role")
-      .eq("board_id", id),
+    // board_members is gated on `is_board_member`; anonymous viewers get
+    // an empty array. That's fine — they just don't see the member list.
+    supabase.from("board_members").select("user_id, role").eq("board_id", id),
     supabase
       .from("property_artifacts")
       .select(
@@ -80,8 +84,11 @@ export default async function BoardPage({
   ]);
 
   const members = memberRows ?? [];
-  const currentRole = members.find((m) => m.user_id === user.sub)?.role ?? null;
+  const currentRole = userId
+    ? (members.find((m) => m.user_id === userId)?.role ?? null)
+    : null;
   const isOwner = currentRole === "owner";
+  const canEdit = currentRole === "owner" || currentRole === "editor";
 
   // Owner-only enrichment: pull emails for members via the admin client so
   // the invites section can show "alice@x.com — editor" rather than uuids.
@@ -202,7 +209,11 @@ export default async function BoardPage({
     (a, b) => b.scrapedAt.localeCompare(a.scrapedAt),
   );
 
-  // Pre-sign image URLs server-side so the client never sees raw paths.
+  // Pre-sign image URLs server-side. Always go through the admin client so
+  // anonymous viewers of a public board can load images — the storage
+  // bucket's RLS policies are authenticated-only, but signed URLs bypass
+  // them. We've already filtered to artifacts the viewer is allowed to see
+  // via the regular RLS path above.
   const imagePaths = artifacts
     .filter((a): a is Extract<typeof a, { kind: "image" }> => a.kind === "image")
     .map((a) => a.storagePath)
@@ -210,7 +221,8 @@ export default async function BoardPage({
 
   const signedImageUrls: Record<string, string> = {};
   if (imagePaths.length > 0) {
-    const { data: signed } = await supabase.storage
+    const admin = createAdminClient();
+    const { data: signed } = await admin.storage
       .from("artifacts")
       .createSignedUrls(imagePaths, 3600);
     for (const item of signed ?? []) {
@@ -237,11 +249,14 @@ export default async function BoardPage({
         </h1>
       </header>
 
+      {!canEdit && <ReadOnlyBanner signedIn={!!userId} />}
+
       <Card>
         <CardContent>
           <CategoriesSection
             boardId={board.id}
             categories={categoriesData ?? []}
+            canEdit={canEdit}
           />
         </CardContent>
       </Card>
@@ -255,7 +270,7 @@ export default async function BoardPage({
       )}
 
       <section className="space-y-6">
-        <AddArtifact boardId={board.id} />
+        {canEdit && <AddArtifact boardId={board.id} />}
         <BoardCanvas
           boardId={board.id}
           artifacts={artifacts}
@@ -265,8 +280,17 @@ export default async function BoardPage({
           tagsByArtifact={tagsByArtifact}
           allTags={tagRows ?? []}
           provenanceByArtifact={provenanceByArtifact}
+          canEdit={canEdit}
         />
       </section>
+
+      {isOwner && (
+        <Card>
+          <CardContent>
+            <SharingSection boardId={board.id} isPublic={board.is_public} />
+          </CardContent>
+        </Card>
+      )}
 
       {isOwner && (
         <Card>
@@ -274,13 +298,13 @@ export default async function BoardPage({
             <InvitesSection
               boardId={board.id}
               members={membersWithEmail}
-              currentUserId={user.sub}
+              currentUserId={userId ?? ""}
             />
           </CardContent>
         </Card>
       )}
 
-      <PasteImageListener boardId={board.id} />
+      {canEdit && <PasteImageListener boardId={board.id} />}
       <RealtimeBridge boardId={board.id} />
     </main>
   );

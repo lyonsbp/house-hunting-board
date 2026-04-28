@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useActionState, useEffect, useRef, useState } from "react";
 import {
   Dropdown,
   DropdownItem,
@@ -23,6 +23,13 @@ import {
   type AddCommentState,
   type CommentRow,
 } from "./actions";
+import {
+  discardAiEdit,
+  editImageArtifact,
+  getAiQuota,
+  type AiQuotaStatus,
+  type EditImageState,
+} from "./ai-edit-actions";
 
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
@@ -37,7 +44,7 @@ type Provenance = {
   state: string | null;
   sourceUrl: string;
 };
-type PanelKind = null | "categorize" | "tags" | "comments";
+type PanelKind = null | "categorize" | "tags" | "comments" | "ai-edit";
 
 export function ArtifactCard({
   artifact,
@@ -48,6 +55,7 @@ export function ArtifactCard({
   tags,
   allTags,
   provenance,
+  canEdit,
 }: {
   artifact: Artifact;
   boardId: string;
@@ -57,6 +65,7 @@ export function ArtifactCard({
   tags: Tag[];
   allTags: Tag[];
   provenance?: Provenance;
+  canEdit: boolean;
 }) {
   const [openPanel, setOpenPanel] = useState<PanelKind>(null);
   const formRef = useRef<HTMLFormElement>(null);
@@ -64,20 +73,25 @@ export function ArtifactCard({
   return (
     <div className="group relative">
       {/* Hidden form for the Remove action */}
-      <form
-        ref={formRef}
-        action={deleteArtifact}
-        className="hidden"
-        aria-hidden="true"
-      >
-        <input type="hidden" name="id" value={artifact.id} />
-        <input type="hidden" name="boardId" value={boardId} />
-      </form>
+      {canEdit && (
+        <form
+          ref={formRef}
+          action={deleteArtifact}
+          className="hidden"
+          aria-hidden="true"
+        >
+          <input type="hidden" name="id" value={artifact.id} />
+          <input type="hidden" name="boardId" value={boardId} />
+        </form>
+      )}
 
-      <CardOverflowMenu
-        onOpenPanel={setOpenPanel}
-        onRemove={() => formRef.current?.requestSubmit()}
-      />
+      {canEdit && (
+        <CardOverflowMenu
+          kind={artifact.kind}
+          onOpenPanel={setOpenPanel}
+          onRemove={() => formRef.current?.requestSubmit()}
+        />
+      )}
 
       <CardBody
         artifact={artifact}
@@ -104,9 +118,11 @@ export function ArtifactCard({
 }
 
 function CardOverflowMenu({
+  kind,
   onOpenPanel,
   onRemove,
 }: {
+  kind: Artifact["kind"];
   onOpenPanel: (panel: PanelKind) => void;
   onRemove: () => void;
 }) {
@@ -137,6 +153,11 @@ function CardOverflowMenu({
           <DropdownItem onAction={() => onOpenPanel("comments")}>
             Comments
           </DropdownItem>
+          {kind === "image" && (
+            <DropdownItem onAction={() => onOpenPanel("ai-edit")}>
+              AI edit…
+            </DropdownItem>
+          )}
           <DropdownItem variant="danger" onAction={onRemove}>
             Remove
           </DropdownItem>
@@ -210,22 +231,38 @@ function ImageBody({
   provenance?: Provenance;
 }) {
   const provenanceLabel = provenance ? formatProvenance(provenance) : null;
+  const [zoomed, setZoomed] = useState(false);
   return (
     <figure>
       <div className="overflow-hidden rounded-xl bg-stone-100 shadow-[0_2px_24px_-10px_rgba(0,0,0,0.25)]">
         {signedImageUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={signedImageUrl}
-            alt={artifact.body || "Board image"}
-            className="block h-auto w-full"
-            loading="lazy"
-            draggable={false}
-          />
+          <button
+            type="button"
+            onClick={() => setZoomed(true)}
+            aria-label="Zoom image"
+            className="block w-full cursor-zoom-in"
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={signedImageUrl}
+              alt={artifact.body || "Board image"}
+              className="block h-auto w-full"
+              loading="lazy"
+              draggable={false}
+            />
+          </button>
         ) : (
           <div className="aspect-square animate-pulse" />
         )}
       </div>
+      {zoomed && signedImageUrl && (
+        <ImageZoomDialog
+          src={signedImageUrl}
+          alt={artifact.body || "Board image"}
+          caption={artifact.body}
+          onClose={() => setZoomed(false)}
+        />
+      )}
       {artifact.body && (
         <figcaption
           style={{ fontFamily: SERIF }}
@@ -425,7 +462,9 @@ function CardPanelDialog({
       ? "Categorize"
       : openPanel === "tags"
         ? "Tags"
-        : "Comments";
+        : openPanel === "ai-edit"
+          ? "AI edit"
+          : "Comments";
 
   return (
     <dialog
@@ -435,6 +474,14 @@ function CardPanelDialog({
         // Close on backdrop click (target === dialog itself)
         if (e.target === ref.current) onClose();
       }}
+      // The dialog is a descendant of a dnd-kit SortableCardWrapper. Native
+      // <dialog showModal()> moves rendering to the top layer but pointer
+      // events still bubble through React's tree, so without stopping them
+      // dnd-kit interprets clicks inside the modal as drag-starts on the
+      // card behind it. Eat pointer events at the dialog boundary.
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerMove={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
       className="m-0 mx-auto my-auto rounded-2xl border border-stone-200 bg-white p-0 shadow-2xl backdrop:bg-stone-900/30 backdrop:backdrop-blur-sm"
     >
       <div className="w-[min(420px,90vw)] p-6">
@@ -483,6 +530,13 @@ function CardPanelDialog({
         )}
         {openPanel === "comments" && (
           <CommentsPanel artifactId={artifact.id} boardId={boardId} />
+        )}
+        {openPanel === "ai-edit" && artifact.kind === "image" && (
+          <AiEditPanel
+            artifactId={artifact.id}
+            boardId={boardId}
+            onDone={onClose}
+          />
         )}
       </div>
     </dialog>
@@ -806,5 +860,251 @@ function CommentForm({
         </button>
       </div>
     </form>
+  );
+}
+
+type ZoomAction = {
+  label: string;
+  onClick: () => void;
+  variant?: "primary" | "danger" | "ghost";
+  disabled?: boolean;
+};
+
+function ImageZoomDialog({
+  src,
+  alt,
+  caption,
+  onClose,
+  actions,
+}: {
+  src: string;
+  alt: string;
+  caption?: string;
+  onClose: () => void;
+  /**
+   * Optional action buttons. When provided, replaces the click-to-close
+   * behavior on the image (so the user can't accidentally dismiss a
+   * generated edit) — the explicit action buttons are the only way out
+   * besides Esc / backdrop / X.
+   */
+  actions?: ZoomAction[];
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dlg = ref.current;
+    if (!dlg) return;
+    if (!dlg.open) dlg.showModal();
+    return () => {
+      if (dlg.open) dlg.close();
+    };
+  }, []);
+
+  const hasActions = !!actions && actions.length > 0;
+
+  return (
+    <dialog
+      ref={ref}
+      onClose={onClose}
+      onClick={(e) => {
+        if (e.target === ref.current) onClose();
+      }}
+      onPointerDown={(e) => e.stopPropagation()}
+      onPointerMove={(e) => e.stopPropagation()}
+      onPointerUp={(e) => e.stopPropagation()}
+      className="m-0 mx-auto my-auto max-h-[95vh] max-w-[95vw] rounded-xl border-0 bg-transparent p-0 backdrop:bg-stone-900/80 backdrop:backdrop-blur-sm"
+    >
+      <div className="flex flex-col items-center gap-3">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt={alt}
+          onClick={hasActions ? undefined : onClose}
+          className={`block max-h-[85vh] w-auto max-w-[95vw] rounded-xl object-contain shadow-2xl ${
+            hasActions ? "" : "cursor-zoom-out"
+          }`}
+          draggable={false}
+        />
+        {caption && (
+          <figcaption
+            style={{ fontFamily: SERIF }}
+            className="max-w-[80vw] px-2 text-center text-sm italic leading-snug text-stone-100"
+          >
+            {caption}
+          </figcaption>
+        )}
+        {hasActions && (
+          <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
+            {actions!.map((a) => (
+              <button
+                key={a.label}
+                type="button"
+                onClick={a.onClick}
+                disabled={a.disabled}
+                className={zoomActionClass(a.variant)}
+                style={{ letterSpacing: "0.12em" }}
+              >
+                {a.label}
+              </button>
+            ))}
+          </div>
+        )}
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="absolute right-3 top-3 inline-flex h-8 w-8 items-center justify-center rounded-full bg-white/10 text-white backdrop-blur-sm hover:bg-white/20"
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M6 6 L18 18 M18 6 L6 18" />
+          </svg>
+        </button>
+      </div>
+    </dialog>
+  );
+}
+
+function zoomActionClass(variant: ZoomAction["variant"]): string {
+  const base =
+    "rounded-md px-4 py-2 text-xs uppercase disabled:opacity-50 transition-colors";
+  switch (variant) {
+    case "primary":
+      return `${base} bg-stone-50 text-stone-900 hover:bg-white`;
+    case "danger":
+      return `${base} bg-red-600/90 text-white hover:bg-red-600`;
+    default:
+      return `${base} bg-white/10 text-white hover:bg-white/20`;
+  }
+}
+
+const editImageInitial: EditImageState = { status: "idle" };
+
+function AiEditPanel({
+  artifactId,
+  boardId,
+  onDone,
+}: {
+  artifactId: string;
+  boardId: string;
+  onDone: () => void;
+}) {
+  const [quota, setQuota] = useState<AiQuotaStatus | null>(null);
+  const [reviewDismissed, setReviewDismissed] = useState(false);
+  const [discarding, setDiscarding] = useState(false);
+  const [state, action, pending] = useActionState(
+    editImageArtifact,
+    editImageInitial,
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    getAiQuota().then((q) => {
+      if (!cancelled) setQuota(q);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // When the action settles successfully we *don't* auto-close — the user
+  // gets a zoomed review with Keep / Discard. Closing happens on Keep.
+  const showingReview =
+    state.status === "done" && !reviewDismissed && !!state.signedUrl;
+
+  const remaining = quota?.exempt
+    ? "∞"
+    : quota
+      ? Math.max(0, (quota.remaining ?? 0)).toString()
+      : "…";
+  const atLimit =
+    !!quota && !quota.exempt && (quota.remaining ?? 0) <= 0;
+
+  async function handleDiscard() {
+    if (state.status !== "done") return;
+    setDiscarding(true);
+    try {
+      await discardAiEdit({
+        boardId,
+        outputArtifactId: state.outputArtifactId,
+      });
+      // Refresh the quota so the badge reflects the rolled-back invocation.
+      const q = await getAiQuota();
+      setQuota(q);
+      setReviewDismissed(true);
+    } finally {
+      setDiscarding(false);
+    }
+  }
+
+  return (
+    <>
+      <form action={action} className="flex flex-col gap-3">
+        <input type="hidden" name="boardId" value={boardId} />
+        <input type="hidden" name="artifactId" value={artifactId} />
+
+        <p className="text-[11px] uppercase tracking-wide text-stone-500">
+          {remaining} of {quota?.limit ?? "10"}{" "}
+          {quota?.exempt ? "edits" : "edits left this week"}
+        </p>
+
+        <textarea
+          name="prompt"
+          rows={3}
+          maxLength={1000}
+          required
+          placeholder="e.g. Add a small pool with a tanning ledge to the backyard"
+          disabled={pending || atLimit}
+          defaultValue={state.status === "done" ? state.prompt : undefined}
+          className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200 disabled:bg-stone-50"
+        />
+
+        {state.status === "error" && (
+          <p className="text-sm text-red-700">{state.message}</p>
+        )}
+        {atLimit && state.status !== "error" && (
+          <p className="text-sm text-amber-700">
+            You&apos;ve used your weekly AI edit quota. The counter resets on a
+            rolling 7-day window.
+          </p>
+        )}
+
+        <div className="flex items-center justify-end gap-2">
+          <button
+            type="submit"
+            disabled={pending || atLimit}
+            className="rounded-md bg-stone-900 px-3 py-1.5 text-xs uppercase tracking-wider text-stone-50 disabled:opacity-50"
+            style={{ letterSpacing: "0.12em" }}
+          >
+            {pending ? "Editing…" : "Generate"}
+          </button>
+        </div>
+      </form>
+
+      {showingReview && state.status === "done" && state.signedUrl && (
+        <ImageZoomDialog
+          src={state.signedUrl}
+          alt="AI edit preview"
+          caption={state.prompt}
+          // X / backdrop / Esc closes the zoom only — the parent AI edit
+          // dialog stays open so the user can immediately retry without
+          // having to reopen the menu.
+          onClose={() => setReviewDismissed(true)}
+          actions={[
+            {
+              label: discarding ? "Discarding…" : "Discard & retry",
+              variant: "danger",
+              onClick: handleDiscard,
+              disabled: discarding,
+            },
+            {
+              label: "Keep",
+              variant: "primary",
+              onClick: onDone,
+              disabled: discarding,
+            },
+          ]}
+        />
+      )}
+    </>
   );
 }

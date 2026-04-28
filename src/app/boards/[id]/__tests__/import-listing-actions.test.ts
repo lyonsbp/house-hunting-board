@@ -50,9 +50,31 @@ const REDFIN_HTML = readFileSync(join(FIXTURE_DIR, "redfin-embedded.html"), "utf
 
 let fetchMock: ReturnType<typeof vi.fn>;
 
+function listingScrapesUnderQuota() {
+  return {
+    select: vi.fn().mockReturnValue({
+      eq: vi.fn().mockReturnValue({
+        gte: vi.fn().mockResolvedValue({ count: 0, error: null }),
+      }),
+    }),
+    insert: vi.fn().mockResolvedValue({ error: null }),
+  };
+}
+
 beforeEach(async () => {
   vi.clearAllMocks();
-  getCurrentUser.mockResolvedValue({ sub: "user-1" });
+  vi.unstubAllEnvs();
+  getCurrentUser.mockResolvedValue({
+    sub: "user-1",
+    email: "user-1@example.com",
+  });
+
+  // Default: previewListing's quota check passes and the log insert succeeds.
+  // commit-flow tests override this with their own mockImplementation.
+  userClient.from.mockImplementation((table: string) => {
+    if (table === "listing_scrapes") return listingScrapesUnderQuota();
+    throw new Error(`unexpected user table ${table}`);
+  });
 
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
@@ -60,6 +82,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.unstubAllEnvs();
 });
 
 describe("previewListing", () => {
@@ -107,6 +130,71 @@ describe("previewListing", () => {
     if (out.status === "error") {
       expect(out.code).toBe("blocked");
     }
+  });
+
+  it("returns a rate-limit error when the user has hit the daily cap", async () => {
+    vi.stubEnv("LISTING_SCRAPE_DAILY_LIMIT", "3");
+    userClient.from.mockImplementation((table: string) => {
+      if (table === "listing_scrapes") {
+        return {
+          select: vi.fn().mockReturnValue({
+            eq: vi.fn().mockReturnValue({
+              gte: vi.fn().mockResolvedValue({ count: 3, error: null }),
+            }),
+          }),
+          insert: vi.fn().mockResolvedValue({ error: null }),
+        };
+      }
+      throw new Error(`unexpected user table ${table}`);
+    });
+
+    const { previewListing } = await import("../import-listing-actions");
+    const fd = new FormData();
+    fd.set("boardId", "12345678-1234-4abc-8def-1234567890ab");
+    fd.set("url", "https://www.redfin.com/WA/Seattle/x/home/1");
+
+    const out = await previewListing({ status: "idle" }, fd);
+    expect(out.status).toBe("error");
+    if (out.status === "error") {
+      expect(out.code).toBe("rate-limit");
+      expect(out.message).toMatch(/limit reached/i);
+    }
+    // Did not attempt to fetch the listing because we shorted out at the gate.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("lets a superadmin email past the rate limit", async () => {
+    vi.stubEnv("LISTING_SCRAPE_DAILY_LIMIT", "1");
+    vi.stubEnv("SUPERADMIN_EMAILS", "Owner@Example.COM, other@example.com");
+    getCurrentUser.mockResolvedValue({
+      sub: "user-2",
+      email: "owner@example.com",
+    });
+    fetchMock.mockResolvedValueOnce(htmlResponse(REDFIN_HTML));
+
+    // Even though the count is way over the limit, the superadmin should
+    // skip the quota gate entirely and never call the count query.
+    const insertSpy = vi.fn().mockResolvedValue({ error: null });
+    userClient.from.mockImplementation((table: string) => {
+      if (table === "listing_scrapes") {
+        return {
+          select: vi.fn().mockImplementation(() => {
+            throw new Error("superadmin should not run the count query");
+          }),
+          insert: insertSpy,
+        };
+      }
+      throw new Error(`unexpected user table ${table}`);
+    });
+
+    const { previewListing } = await import("../import-listing-actions");
+    const fd = new FormData();
+    fd.set("boardId", "12345678-1234-4abc-8def-1234567890ab");
+    fd.set("url", "https://www.redfin.com/WA/Seattle/x/home/1");
+
+    const out = await previewListing({ status: "idle" }, fd);
+    expect(out.status).toBe("ready");
+    expect(insertSpy).toHaveBeenCalledTimes(1);
   });
 });
 

@@ -60,6 +60,7 @@ export function BoardCanvas({
   tagsByArtifact,
   allTags,
   provenanceByArtifact,
+  canEdit,
 }: {
   boardId: string;
   artifacts: Artifact[];
@@ -69,6 +70,7 @@ export function BoardCanvas({
   tagsByArtifact: Record<string, Tag[]>;
   allTags: Tag[];
   provenanceByArtifact: Record<string, ArtifactProvenance>;
+  canEdit: boolean;
 }) {
   const router = useRouter();
 
@@ -142,6 +144,7 @@ export function BoardCanvas({
   }
 
   function handleDragEnd(event: DragEndEvent) {
+    if (!canEdit) return;
     const { active, over } = event;
     if (!over) return;
     const src = findLaneOf(active.id as string);
@@ -239,6 +242,7 @@ export function BoardCanvas({
             membershipsByArtifact={membershipsByArtifact}
             allTags={allTags}
             provenanceByArtifact={provenanceByArtifact}
+            canEdit={canEdit}
           />
         ))}
       </div>
@@ -255,6 +259,7 @@ function LaneSection({
   membershipsByArtifact,
   allTags,
   provenanceByArtifact,
+  canEdit,
 }: {
   lane: Lane;
   boardId: string;
@@ -264,6 +269,7 @@ function LaneSection({
   membershipsByArtifact: Record<string, Membership[]>;
   allTags: Tag[];
   provenanceByArtifact: Record<string, ArtifactProvenance>;
+  canEdit: boolean;
 }) {
   const sortableIds = lane.artifacts.map((a) => `${lane.id}::${a.id}`);
 
@@ -289,7 +295,9 @@ function LaneSection({
         <p className="text-sm italic text-stone-400" style={{ fontFamily: SERIF }}>
           {lane.id === UNCATEGORIZED
             ? "Everything is categorized."
-            : "Drag artifacts here, or assign via the card menu."}
+            : canEdit
+              ? "Drag artifacts here, or assign via the card menu."
+              : "Empty."}
         </p>
       ) : (
         <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
@@ -312,6 +320,7 @@ function LaneSection({
                 }
                 allTags={allTags}
                 provenance={provenanceByArtifact[art.id]}
+                canEdit={canEdit}
               />
             ))}
           </div>
@@ -331,6 +340,7 @@ function SortableCardWrapper({
   memberCategoryIds,
   allTags,
   provenance,
+  canEdit,
 }: {
   sortableId: string;
   artifact: Artifact;
@@ -341,9 +351,14 @@ function SortableCardWrapper({
   memberCategoryIds: string[];
   allTags: Tag[];
   provenance?: ArtifactProvenance;
+  canEdit: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
-    useSortable({ id: sortableId });
+    useSortable({ id: sortableId, disabled: !canEdit });
+
+  // Read-only viewers don't get drag listeners — keeps the cursor a normal
+  // pointer and avoids dnd-kit hijacking image-zoom clicks.
+  const dragProps = canEdit ? { ...attributes, ...listeners } : {};
 
   return (
     <div
@@ -354,8 +369,7 @@ function SortableCardWrapper({
         transition,
         opacity: isDragging ? 0.4 : 1,
       }}
-      {...attributes}
-      {...listeners}
+      {...dragProps}
       className="mb-5 break-inside-avoid md:mb-6"
     >
       <ArtifactCard
@@ -367,6 +381,7 @@ function SortableCardWrapper({
         tags={tags}
         allTags={allTags}
         provenance={provenance}
+        canEdit={canEdit}
       />
     </div>
   );

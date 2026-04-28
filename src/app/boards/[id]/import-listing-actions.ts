@@ -5,6 +5,11 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { getCurrentUser } from "@/lib/auth";
+import {
+  getDailyScrapeLimit,
+  isSuperadminEmail,
+  startOfTodayUtc,
+} from "@/lib/listings/quota";
 import { getFetcher } from "@/lib/listings/registry";
 import {
   ListingFetchError,
@@ -48,7 +53,8 @@ export type PreviewListingState =
         | "timeout"
         | "parse"
         | "http"
-        | "not-html";
+        | "not-html"
+        | "rate-limit";
       message: string;
     };
 
@@ -88,6 +94,51 @@ export async function previewListing(
       };
     }
     throw e;
+  }
+
+  // Rate-limit gate. Superadmins listed in SUPERADMIN_EMAILS skip the count.
+  const supabase = await createClient();
+  const exempt = isSuperadminEmail(
+    typeof user.email === "string" ? user.email : null,
+  );
+  if (!exempt) {
+    const limit = getDailyScrapeLimit();
+    const { count, error: countError } = await supabase
+      .from("listing_scrapes")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", user.sub)
+      .gte("created_at", startOfTodayUtc());
+    if (countError) {
+      return {
+        status: "error",
+        code: "http",
+        message: `Couldn't check daily quota: ${countError.message}`,
+      };
+    }
+    if ((count ?? 0) >= limit) {
+      return {
+        status: "error",
+        code: "rate-limit",
+        message: `Daily scan limit reached (${limit}/day). Try again tomorrow.`,
+      };
+    }
+  }
+
+  // Log the scrape attempt before we make the (possibly billable) call.
+  // Counting attempts rather than successes prevents a user from burning
+  // Scrapfly credits by retrying bad URLs in a loop.
+  const { error: logError } = await supabase.from("listing_scrapes").insert({
+    user_id: user.sub,
+    source: fetcher.source,
+    source_url: parsed.data.url,
+    status: "preview",
+  });
+  if (logError) {
+    return {
+      status: "error",
+      code: "http",
+      message: `Couldn't log scrape: ${logError.message}`,
+    };
   }
 
   let preview: ListingPreview;
