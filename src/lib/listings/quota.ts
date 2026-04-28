@@ -29,6 +29,22 @@ export function getDailyRefreshLimit(): number {
   return Number.isFinite(n) && n > 0 ? n : DEFAULT_REFRESH_LIMIT;
 }
 
+const DEFAULT_REFRESH_COOLDOWN_HOURS = 12;
+
+/**
+ * Cool-down between successive refreshes of the same property, applied
+ * globally (not per-user). Listings rarely change more than once a week
+ * — a 12h floor lets a partner re-check the same listing later in the
+ * day while still preventing any single property from racking up 100
+ * Scrapfly calls in an afternoon.
+ */
+export function getRefreshCooldownMs(): number {
+  const raw = process.env.LISTING_REFRESH_COOLDOWN_HOURS;
+  const hours = raw ? Number.parseFloat(raw) : DEFAULT_REFRESH_COOLDOWN_HOURS;
+  const safe = Number.isFinite(hours) && hours >= 0 ? hours : DEFAULT_REFRESH_COOLDOWN_HOURS;
+  return safe * 60 * 60 * 1000;
+}
+
 export function isSuperadminEmail(email: string | null | undefined): boolean {
   if (!email) return false;
   const list = (process.env.SUPERADMIN_EMAILS ?? "")

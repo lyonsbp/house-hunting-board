@@ -7,6 +7,7 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import {
   getDailyRefreshLimit,
+  getRefreshCooldownMs,
   isSuperadminEmail,
   startOfTodayUtc,
 } from "@/lib/listings/quota";
@@ -109,6 +110,19 @@ export async function refreshListing(input: {
   if (pErr) return { error: pErr.message };
   if (!property) return { error: "Property not found." };
 
+  // Cool-down: refuse to re-scrape if the last fetch is still fresh.
+  // Listings barely change day-to-day; this prevents a refresh-spam from
+  // burning Scrapfly credits on data that's already current.
+  if (!exempt) {
+    const cooldownMs = getRefreshCooldownMs();
+    const ageMs = Date.now() - new Date(property.scraped_at).getTime();
+    if (ageMs >= 0 && ageMs < cooldownMs) {
+      return {
+        error: `Just refreshed ${humanizeDuration(ageMs)} ago. Try again in ${humanizeDuration(cooldownMs - ageMs)}.`,
+      };
+    }
+  }
+
   let fetcher;
   try {
     fetcher = getFetcher(property.source_url);
@@ -205,4 +219,18 @@ export async function refreshListing(input: {
     previousStatus: property.status ?? null,
     newStatus,
   };
+}
+
+function humanizeDuration(ms: number): string {
+  if (ms < 0) ms = 0;
+  const minutes = Math.round(ms / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes}m`;
+  const hours = minutes / 60;
+  if (hours < 24) {
+    const rounded = Math.round(hours * 10) / 10;
+    return `${rounded}h`;
+  }
+  const days = Math.round(hours / 24);
+  return `${days}d`;
 }
