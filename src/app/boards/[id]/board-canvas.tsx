@@ -401,7 +401,7 @@ function LaneSection({
         />
       ) : (
         <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
-          <div className="columns-2 gap-5 [column-fill:_balance] md:columns-3 md:gap-6 lg:columns-4">
+          <div className="grid grid-cols-2 gap-5 md:grid-cols-3 md:gap-6 lg:grid-cols-4">
             {lane.artifacts.map((art) => (
               <SortableCardWrapper
                 key={`${lane.id}::${art.id}`}
@@ -514,7 +514,7 @@ function SortableCardWrapper({
       suppressHydrationWarning
       style={style}
       {...dragProps}
-      className="mb-5 break-inside-avoid md:mb-6"
+      className="self-start"
     >
       <ArtifactCard
         artifact={artifact}
