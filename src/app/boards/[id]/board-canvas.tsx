@@ -4,12 +4,17 @@ import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   DndContext,
+  DragOverlay,
   MouseSensor,
   TouchSensor,
-  closestCenter,
+  pointerWithin,
+  rectIntersection,
+  useDroppable,
   useSensor,
   useSensors,
+  type CollisionDetection,
   type DragEndEvent,
+  type DragStartEvent,
 } from "@dnd-kit/core";
 import {
   SortableContext,
@@ -121,6 +126,7 @@ export function BoardCanvas({
   }, [artifacts, categories, membershipsByArtifact]);
 
   const [optimistic, setOptimistic] = useState<Lane[] | null>(null);
+  const [activeId, setActiveId] = useState<string | null>(null);
   const displayLanes = optimistic ?? lanes;
 
   // Split sensors so touch scrolling still works on phones. Mouse drags
@@ -134,36 +140,43 @@ export function BoardCanvas({
     }),
   );
 
-  function findLaneOf(sortableId: string): {
-    laneId: string;
-    artifactId: string;
-  } | null {
-    const i = sortableId.indexOf("::");
-    if (i < 0) return null;
-    return { laneId: sortableId.slice(0, i), artifactId: sortableId.slice(i + 2) };
+  // pointerWithin gives precise drops on cards/lanes the cursor is over;
+  // rectIntersection fills in when the pointer leaves all droppables (e.g.
+  // dragging fast over the gap between lanes).
+  const collisionDetection: CollisionDetection = (args) => {
+    const pointer = pointerWithin(args);
+    if (pointer.length > 0) return pointer;
+    return rectIntersection(args);
+  };
+
+  const activeParsed = activeId ? parseSortableId(activeId) : null;
+  const activeArtifact = activeParsed
+    ? artifacts.find((a) => a.id === activeParsed.artifactId) ?? null
+    : null;
+
+  function handleDragStart(event: DragStartEvent) {
+    setActiveId(event.active.id as string);
   }
 
-  function laneIdOfDropTarget(overId: string): string | null {
-    if (!overId) return null;
-    if (overId.includes("::")) {
-      return overId.slice(0, overId.indexOf("::"));
-    }
-    return overId; // dropped directly on a lane droppable
+  function handleDragCancel() {
+    setActiveId(null);
   }
 
   function handleDragEnd(event: DragEndEvent) {
+    setActiveId(null);
     if (!canEdit) return;
     const { active, over } = event;
     if (!over) return;
-    const src = findLaneOf(active.id as string);
+    const src = parseSortableId(active.id as string);
     const destLaneId = laneIdOfDropTarget(over.id as string);
     if (!src || !destLaneId) return;
 
     // Same lane → reorder (only meaningful for category lanes; uncategorized
-    // is order-less).
+    // is order-less). If the drop target is the lane itself (not a sibling
+    // card), there's nothing to reorder against.
     if (src.laneId === destLaneId) {
       if (src.laneId === UNCATEGORIZED) return;
-      const overParsed = findLaneOf(over.id as string);
+      const overParsed = parseSortableId(over.id as string);
       if (!overParsed || overParsed.artifactId === src.artifactId) return;
 
       const lane = displayLanes.find((l) => l.id === src.laneId);
@@ -198,11 +211,15 @@ export function BoardCanvas({
       return;
     }
 
-    // Cross-lane drag.
+    // Cross-lane drag. Drop on Uncategorized = remove from the source
+    // category (the only meaningful interpretation of "drag back to nothing").
     if (destLaneId === UNCATEGORIZED) {
-      // Don't allow drops on Uncategorized — use the card menu to remove a
-      // category. Could be confusing semantically when an artifact belongs to
-      // multiple categories.
+      if (src.laneId === UNCATEGORIZED) return;
+      void unassignCategory({
+        artifactId: src.artifactId,
+        categoryId: src.laneId,
+        boardId,
+      }).finally(() => router.refresh());
       return;
     }
     if (src.laneId === UNCATEGORIZED) {
@@ -235,8 +252,10 @@ export function BoardCanvas({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={collisionDetection}
+      onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
+      onDragCancel={handleDragCancel}
     >
       <div className="flex flex-col gap-12">
         {displayLanes.map((lane) => (
@@ -251,11 +270,68 @@ export function BoardCanvas({
             allTags={allTags}
             provenanceByArtifact={provenanceByArtifact}
             canEdit={canEdit}
+            sourceLaneId={activeParsed?.laneId ?? null}
           />
         ))}
       </div>
+      <DragOverlay
+        zIndex={1000}
+        dropAnimation={{
+          duration: 200,
+          easing: "cubic-bezier(0.18, 0.67, 0.6, 1.22)",
+        }}
+      >
+        {activeArtifact ? (
+          <div className="rotate-1 cursor-grabbing opacity-95 shadow-2xl shadow-stone-900/40">
+            <ArtifactCard
+              artifact={activeArtifact}
+              boardId={boardId}
+              categories={categories}
+              memberCategoryIds={
+                membershipsByArtifact[activeArtifact.id]?.map(
+                  (m) => m.categoryId,
+                ) ?? []
+              }
+              signedImageUrl={
+                activeArtifact.kind === "image"
+                  ? signedImageUrls[activeArtifact.storagePath]
+                  : undefined
+              }
+              tags={tagsByArtifact[activeArtifact.id] ?? []}
+              allTags={allTags}
+              provenance={provenanceByArtifact[activeArtifact.id]}
+              canEdit={false}
+            />
+          </div>
+        ) : null}
+      </DragOverlay>
     </DndContext>
   );
+}
+
+function parseSortableId(sortableId: string): {
+  laneId: string;
+  artifactId: string;
+} | null {
+  const i = sortableId.indexOf("::");
+  if (i < 0) return null;
+  return {
+    laneId: sortableId.slice(0, i),
+    artifactId: sortableId.slice(i + 2),
+  };
+}
+
+const LANE_DROPPABLE_PREFIX = "lane:";
+
+function laneIdOfDropTarget(overId: string): string | null {
+  if (!overId) return null;
+  if (overId.startsWith(LANE_DROPPABLE_PREFIX)) {
+    return overId.slice(LANE_DROPPABLE_PREFIX.length);
+  }
+  if (overId.includes("::")) {
+    return overId.slice(0, overId.indexOf("::"));
+  }
+  return null;
 }
 
 function LaneSection({
@@ -268,6 +344,7 @@ function LaneSection({
   allTags,
   provenanceByArtifact,
   canEdit,
+  sourceLaneId,
 }: {
   lane: Lane;
   boardId: string;
@@ -278,13 +355,29 @@ function LaneSection({
   allTags: Tag[];
   provenanceByArtifact: Record<string, ArtifactProvenance>;
   canEdit: boolean;
+  sourceLaneId: string | null;
 }) {
   const sortableIds = lane.artifacts.map((a) => `${lane.id}::${a.id}`);
 
+  // Whole-lane droppable so drops on the gap below cards (and on empty
+  // lanes) register. Cards inside the lane are independent droppables via
+  // SortableContext — those win when the cursor is directly over a card.
+  const { setNodeRef: setLaneRef, isOver: laneIsOver } = useDroppable({
+    id: `${LANE_DROPPABLE_PREFIX}${lane.id}`,
+    disabled: !canEdit,
+  });
+
+  const dragInProgress = sourceLaneId !== null;
+  const isOtherLaneTarget = dragInProgress && sourceLaneId !== lane.id;
+  const showLaneHighlight = laneIsOver && isOtherLaneTarget;
+
   return (
     <section
+      ref={setLaneRef}
       data-lane-id={lane.id}
-      className="flex flex-col gap-5 border-t border-stone-200/80 pt-6 first:border-t-0 first:pt-0"
+      className={`flex flex-col gap-5 rounded-lg border-t border-stone-200/80 pt-6 transition-colors first:border-t-0 first:pt-0 ${
+        showLaneHighlight ? "bg-amber-50/50" : ""
+      }`}
     >
       <header className="flex items-baseline justify-between">
         <h2
@@ -300,13 +393,12 @@ function LaneSection({
       </header>
 
       {lane.artifacts.length === 0 ? (
-        <p className="text-sm italic text-stone-400" style={{ fontFamily: SERIF }}>
-          {lane.id === UNCATEGORIZED
-            ? "Everything is categorized."
-            : canEdit
-              ? "Drag artifacts here, or assign via the card menu."
-              : "Empty."}
-        </p>
+        <EmptyLaneSlot
+          laneId={lane.id}
+          canEdit={canEdit}
+          isDragTarget={showLaneHighlight}
+          dragInProgress={isOtherLaneTarget}
+        />
       ) : (
         <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
           <div className="columns-2 gap-5 [column-fill:_balance] md:columns-3 md:gap-6 lg:columns-4">
@@ -335,6 +427,42 @@ function LaneSection({
         </SortableContext>
       )}
     </section>
+  );
+}
+
+function EmptyLaneSlot({
+  laneId,
+  canEdit,
+  isDragTarget,
+  dragInProgress,
+}: {
+  laneId: string;
+  canEdit: boolean;
+  isDragTarget: boolean;
+  dragInProgress: boolean;
+}) {
+  // Resting copy stays subtle; drag copy reads as a clear affordance.
+  const copy = !canEdit
+    ? "Empty."
+    : laneId === UNCATEGORIZED
+      ? dragInProgress
+        ? "Drop here to remove from its category"
+        : "Everything is categorized."
+      : dragInProgress
+        ? "Drop here"
+        : "Drag a card here, or assign via the card menu.";
+
+  return (
+    <div
+      className={`rounded-lg border-2 border-dashed px-6 py-10 text-center text-sm italic transition-all ${
+        isDragTarget
+          ? "border-amber-400 bg-amber-50/80 text-stone-700"
+          : "border-stone-300/70 text-stone-400"
+      }`}
+      style={{ fontFamily: SERIF }}
+    >
+      {copy}
+    </div>
   );
 }
 
@@ -368,15 +496,23 @@ function SortableCardWrapper({
   // pointer and avoids dnd-kit hijacking image-zoom clicks.
   const dragProps = canEdit ? { ...attributes, ...listeners } : {};
 
+  // While the active item is being dragged, leave its slot empty (opacity 0)
+  // and do NOT apply the cursor-tracking transform — the floating preview is
+  // handled by the top-level <DragOverlay>. Applying a transform here would
+  // get clipped by the masonry CSS-columns container, making the card look
+  // stuck inside its lane.
+  const style = isDragging
+    ? { opacity: 0 }
+    : {
+        transform: CSS.Transform.toString(transform),
+        transition,
+      };
+
   return (
     <div
       ref={setNodeRef}
       suppressHydrationWarning
-      style={{
-        transform: CSS.Transform.toString(transform),
-        transition,
-        opacity: isDragging ? 0.4 : 1,
-      }}
+      style={style}
       {...dragProps}
       className="mb-5 break-inside-avoid md:mb-6"
     >
