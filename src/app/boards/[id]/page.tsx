@@ -3,13 +3,16 @@ import { Card, CardContent } from "@heroui/react";
 
 import { metroForZip } from "@/lib/analytics/metros";
 import { getCurrentUser } from "@/lib/auth";
-import { toArtifact, type ArtifactRow } from "@/lib/artifacts";
+import {
+  loadDashboardSummary,
+  signImagePaths,
+} from "@/lib/board-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 import { AddArtifact } from "./add-artifact";
-import { BoardCanvas } from "./board-canvas";
 import { CategoriesSection } from "./categories-section";
+import { DashboardGrid } from "./dashboard-grid";
 import { InvitesSection, type Member } from "./invites-section";
 import { ListingsPanel, type ImportedListing } from "./listings-panel";
 import { PasteImageListener } from "./paste-image-listener";
@@ -42,14 +45,16 @@ export default async function BoardPage({
 
   if (!board) notFound();
 
+  // Dashboard view: we only need categories + members (canEdit/owner gating
+  // and email enrichment) + the listings catalog (drives the ListingsPanel).
+  // We deliberately don't load full artifact rows / memberships / tags here
+  // — the per-card UI lives in the drill-down route now. Tile thumbnails
+  // come from `loadDashboardSummary` which makes its own bounded queries.
   const [
     { data: categoriesData },
-    { data: artifactRows },
-    { data: membershipRows },
-    { data: artifactTagRows },
-    { data: tagRows },
     { data: memberRows },
     { data: propertyLinkRows },
+    dashboardSummary,
   ] = await Promise.all([
     supabase
       .from("categories")
@@ -57,22 +62,6 @@ export default async function BoardPage({
       .eq("board_id", id)
       .order("sort_order", { ascending: true })
       .order("name", { ascending: true }),
-    supabase
-      .from("artifacts")
-      .select(
-        "id, board_id, kind, storage_path, url, body, metadata, created_at",
-      )
-      .eq("board_id", id)
-      .order("created_at", { ascending: false }),
-    supabase
-      .from("artifact_categories")
-      .select("artifact_id, category_id, sort_order, artifacts!inner(board_id)")
-      .eq("artifacts.board_id", id),
-    supabase
-      .from("artifact_tags")
-      .select("artifact_id, tag_id, artifacts!inner(board_id)")
-      .eq("artifacts.board_id", id),
-    supabase.from("tags").select("id, name").eq("board_id", id),
     // board_members is gated on `is_board_member`; anonymous viewers get
     // an empty array. That's fine — they just don't see the member list.
     supabase.from("board_members").select("user_id, role").eq("board_id", id),
@@ -82,6 +71,7 @@ export default async function BoardPage({
         "artifact_id, artifacts!inner(board_id), properties!inner(id, source, source_url, address, city, state, zip, list_price, sold_price, bedrooms, bathrooms, sqft, year_built, status, scraped_at)",
       )
       .eq("artifacts.board_id", id),
+    loadDashboardSummary(supabase, id),
   ]);
 
   const members = memberRows ?? [];
@@ -119,35 +109,9 @@ export default async function BoardPage({
     }
   }
 
-  const artifacts = (artifactRows ?? []).map((row) =>
-    toArtifact(row as ArtifactRow),
-  );
-
-  // Build membership map: artifactId -> [{ categoryId, sortOrder }]
-  const membershipsByArtifact: Record<
-    string,
-    { categoryId: string; sortOrder: number }[]
-  > = {};
-  for (const m of membershipRows ?? []) {
-    const list = membershipsByArtifact[m.artifact_id] ?? [];
-    list.push({ categoryId: m.category_id, sortOrder: m.sort_order });
-    membershipsByArtifact[m.artifact_id] = list;
-  }
-
-  // Build tag map: artifactId -> [{ id, name }]
-  const tagsById = new Map((tagRows ?? []).map((t) => [t.id, t.name]));
-  const tagsByArtifact: Record<string, { id: string; name: string }[]> = {};
-  for (const at of artifactTagRows ?? []) {
-    const name = tagsById.get(at.tag_id);
-    if (!name) continue;
-    const list = tagsByArtifact[at.artifact_id] ?? [];
-    list.push({ id: at.tag_id, name });
-    tagsByArtifact[at.artifact_id] = list;
-  }
-
-  // Provenance for image artifacts that came from a listing import,
-  // plus a deduped per-board listings catalog with photo counts (for the
-  // "Listings imported" panel).
+  // Build a deduped per-board listings catalog with photo counts (drives the
+  // "Listings imported" panel). Provenance + per-artifact tag/membership data
+  // is no longer needed at this level — it lives in the drill-down route.
   type PropertyJoin = {
     id: string;
     source: string;
@@ -165,10 +129,6 @@ export default async function BoardPage({
     status: string | null;
     scraped_at: string;
   };
-  const provenanceByArtifact: Record<
-    string,
-    { address: string | null; city: string | null; state: string | null; sourceUrl: string }
-  > = {};
   const listingsById = new Map<string, ImportedListing>();
   for (const row of propertyLinkRows ?? []) {
     const propertyJoin = (row as unknown as {
@@ -176,12 +136,6 @@ export default async function BoardPage({
     }).properties;
     const p = Array.isArray(propertyJoin) ? propertyJoin[0] : propertyJoin;
     if (!p) continue;
-    provenanceByArtifact[row.artifact_id] = {
-      address: p.address,
-      city: p.city,
-      state: p.state,
-      sourceUrl: p.source_url,
-    };
     const existing = listingsById.get(p.id);
     if (existing) {
       existing.photoCount += 1;
@@ -314,28 +268,12 @@ export default async function BoardPage({
     }
   }
 
-  // Pre-sign image URLs server-side. Always go through the admin client so
-  // anonymous viewers of a public board can load images — the storage
-  // bucket's RLS policies are authenticated-only, but signed URLs bypass
-  // them. We've already filtered to artifacts the viewer is allowed to see
-  // via the regular RLS path above.
-  const imagePaths = artifacts
-    .filter((a): a is Extract<typeof a, { kind: "image" }> => a.kind === "image")
-    .map((a) => a.storagePath)
-    .filter(Boolean);
-
-  const signedImageUrls: Record<string, string> = {};
-  if (imagePaths.length > 0) {
-    const admin = createAdminClient();
-    const { data: signed } = await admin.storage
-      .from("artifacts")
-      .createSignedUrls(imagePaths, 3600);
-    for (const item of signed ?? []) {
-      if (item.path && item.signedUrl) {
-        signedImageUrls[item.path] = item.signedUrl;
-      }
-    }
-  }
+  // Sign just the dashboard tile thumbnails — bounded by O(categories × 4)
+  // regardless of board size. Drill-down routes sign their own per-card URLs.
+  const thumbnailPaths = Array.from(
+    new Set(dashboardSummary.tiles.flatMap((t) => t.thumbnailPaths)),
+  );
+  const signedThumbUrls = await signImagePaths(thumbnailPaths);
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
@@ -376,15 +314,10 @@ export default async function BoardPage({
 
       <section className="space-y-6">
         {canEdit && <AddArtifact boardId={board.id} />}
-        <BoardCanvas
+        <DashboardGrid
           boardId={board.id}
-          artifacts={artifacts}
-          signedImageUrls={signedImageUrls}
-          categories={categoriesData ?? []}
-          membershipsByArtifact={membershipsByArtifact}
-          tagsByArtifact={tagsByArtifact}
-          allTags={tagRows ?? []}
-          provenanceByArtifact={provenanceByArtifact}
+          summary={dashboardSummary}
+          signedThumbUrls={signedThumbUrls}
           canEdit={canEdit}
         />
       </section>
