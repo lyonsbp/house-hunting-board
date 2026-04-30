@@ -58,6 +58,27 @@ Deploy prerequisites:
    ```
 4. Public Supabase config (`NEXT_PUBLIC_*`) lives in `wrangler.jsonc` under
    `vars` — set per-environment as needed.
+5. Push DB migrations to the linked Supabase project before (or alongside)
+   the first deploy that depends on them. `pnpm deploy` ships only the
+   Worker bundle — DB schema changes are a separate step:
+   ```bash
+   pnpm exec supabase db push --linked
+   ```
+   Skipping this leaves the Worker hitting a Postgres without the
+   columns/tables the new code expects, which surfaces as silently failing
+   server actions (e.g. canvas drops not persisting because `canvas_x`
+   doesn't exist yet).
+
+## Routes
+
+- `/boards/[id]` — dashboard of category tiles for a board.
+- `/boards/[id]/c/[categorySlug]` — single-category drill-down. The slug
+  is kebab-case from `categories.name` (computed on the fly, not stored
+  in the DB). The sentinel `uncategorized` slug renders artifacts that
+  have no category membership.
+- `/boards/[id]/c/[categorySlug]?mode=canvas` — drill-down in freeform
+  pin-board mode. Append `?debug=1` to either drill-down route to
+  surface an on-screen DnD inspector for diagnosing drag-drop issues.
 
 ## Project layout
 

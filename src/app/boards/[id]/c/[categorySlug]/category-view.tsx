@@ -34,6 +34,7 @@ import {
 } from "../../actions";
 import { ArtifactCard } from "../../artifact-card";
 import { DragDebugOverlay } from "./drag-debug-overlay";
+import { NewCategoryDialog } from "./new-category-dialog";
 import {
   SwimlaneDropPanel,
   type SwimlaneTile,
@@ -92,6 +93,11 @@ export function CategoryView({
   const router = useRouter();
   const [optimistic, setOptimistic] = useState<Artifact[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
+  /** Set when the user drops on the "+ New category" swim-lane row.
+   *  Triggers the name modal; null when the modal is closed. */
+  const [pendingNewArtifactId, setPendingNewArtifactId] = useState<
+    string | null
+  >(null);
 
   const artifacts = optimistic ?? initialArtifacts;
 
@@ -134,7 +140,7 @@ export function CategoryView({
 
     const cursor = args.pointerCoordinates;
     if (cursor) {
-      const MAGNET_OFFSET_PX = 300;
+      const MAGNET_OFFSET_PX = 100;
       const inZone: { id: string | number; top: number }[] = [];
       for (const c of args.droppableContainers) {
         if (c.disabled) continue;
@@ -176,6 +182,12 @@ export function CategoryView({
     const overId = String(e.over.id);
 
     // Sticky-bar drops first.
+    if (overId === "chip:new") {
+      // Defer the actual create + assign to the modal — opens with the
+      // dropped artifact pre-selected and asks for a name.
+      setPendingNewArtifactId(activeArtifactId);
+      return;
+    }
     if (overId === "chip:unassign") {
       if (categoryId === UNCATEGORIZED_ID) return;
       void unassignCategory({
@@ -318,6 +330,16 @@ export function CategoryView({
         ) : null}
       </DragOverlay>
       {showDebug && <DragDebugOverlay />}
+      {pendingNewArtifactId && (
+        <NewCategoryDialog
+          boardId={boardId}
+          artifactId={pendingNewArtifactId}
+          sourceCategoryId={
+            categoryId === UNCATEGORIZED_ID ? null : categoryId
+          }
+          onClose={() => setPendingNewArtifactId(null)}
+        />
+      )}
     </DndContext>
   );
 }

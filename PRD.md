@@ -53,7 +53,7 @@ Summary:
 | `board_members` | user ↔ board with role (`owner` / `editor` / `viewer`). |
 | `categories` | Per-board taxonomy (houses, kitchens, …); user-defined. |
 | `artifacts` | Polymorphic: `image` / `link` / `text` / `note`. Holds storage path, URL, body, and a `metadata` jsonb for kind-specific extras. |
-| `artifact_categories` | Many-to-many; an image can be both *kitchen* and *island*. |
+| `artifact_categories` | Many-to-many; an image can be both *kitchen* and *island*. Holds canvas-mode position columns (`canvas_x`, `canvas_y`, `canvas_w`, `canvas_h`) so a card pinned to two categories has independent freeform positions in each (migration `0013`). |
 | `tags`, `artifact_tags` | Free-form secondary axis. |
 | `comments` | Per-artifact discussion. |
 | `properties` | Scraped Redfin/Zillow listing metadata. |
@@ -77,6 +77,57 @@ writes there are server-only via the service role.
 - Free-form tags as a second axis.
 - Comments per artifact.
 - Real-time updates via Supabase Realtime channel `boards:{board_id}`.
+
+### 5.1a Board organization UX (M6 — drill-down dashboard)
+
+The board page is a **dashboard of category tiles**, not a single long
+canvas. Each tile shows the category name, an item count, and a 2×2
+preview strip (top 4 thumbnails by `sort_order`). On desktop, the
+thumbnails fan out into a "hand of cards" on hover; on touch they sit
+as a stacked deck. An "Uncategorized" sentinel tile appears when there
+are artifacts with no category. Click a tile → drill into a focused
+single-category view.
+
+Drill-down route: `/boards/[id]/c/[categorySlug]`. The slug is
+kebab-case (`Modern Kitchens` → `modern-kitchens`), computed on the
+fly from `categories.name` — no DB column, so renaming a category
+takes effect on the next request. The Uncategorized view uses a
+sentinel slug `uncategorized`.
+
+Cross-category drag in the drill-down is handled by a **swim-lane
+drop panel** that slides up from the bottom of the viewport during a
+drag. Each row is a useDroppable target showing the destination
+category name + a thumbnail peek; drops dispatch to
+`assign`/`unassign` server actions. Targeting uses cursor magnet
+zones extending 100px upward from each row's top, with the lowermost
+chip in the cursor's zone winning so selection progresses naturally
+as the user drags toward the panel. Two terminal rows live at the
+bottom: **+ New category** (opens a name modal that creates the
+category, moves the dragged artifact into it, and redirects to the
+new drill-down) and **Remove from category** (clears the assignment).
+
+### 5.1b Canvas mode (M7 — freeform pin board)
+
+Inside a drill-down, a `[Grid | Canvas]` toggle (URL: `?mode=canvas`)
+flips the layout from the responsive grid to a freeform pin board.
+Cards have absolute `(canvas_x, canvas_y)` positions stored on the
+`artifact_categories` row, so the same artifact pinned to two
+categories has independent positions in each. First-time canvas entry
+**lazy-seeds** unpositioned cards into a 4-wide grid driven by
+`sort_order`, idempotent via a `canvas_x is null` filter so partial
+layouts are preserved. A **Reset layout** button re-seeds every card
+in tidy grid order. The canvas viewport is **vertically resizable**
+via the browser's native `resize: vertical` handle; pan is the
+container's native scroll. Canvas mode is unsupported on the
+Uncategorized view (no `artifact_categories` row to attach a
+position to) — the toggle is hidden there.
+
+Realtime collab is automatic: position writes flow through the
+existing `artifact_categories` Supabase Realtime subscription; a
+partner moving a card triggers `router.refresh()` on the other
+client and the new positions render. Canvas v1 ships without
+freeform user-drawn section labels, pan/zoom transforms, or
+per-card resize handles — those are the next iteration.
 
 ### 5.2 Listing Import — Redfin / Zillow (M2)
 
@@ -201,9 +252,11 @@ Cloudflare Workers (cron + queue consumers)
 
 | | Scope |
 |---|---|
-| **M0** | Scaffold (this commit): Next.js + Supabase + Cloudflare + Vitest, schema in place |
+| **M0** | Scaffold: Next.js + Supabase + Cloudflare + Vitest, schema in place |
 | **M1** | Core board: categories + artifacts + Realtime + invites |
 | **M2** | Listing import: URL paste → image picker (scraper) |
 | **M3** | AI image edit + Remix |
 | **M4** | Feature-signal extraction (background worker) |
-| **M5** | Price analytics UI |
+| **M5** | Price analytics UI (cohort table + per-metro filter + chip drilldown) |
+| **M6** | Drill-down dashboard: category-tile dashboard + nested slug route + swim-lane drop panel + fan-out hover + click-after-drag guard |
+| **M7** | Canvas mode: per-category freeform pin board + lazy seed-from-grid + reset + resizable viewport (migration `0013`) |

@@ -79,6 +79,7 @@ export function SwimlaneDropPanel({
                   signedThumbUrls={signedThumbUrls}
                 />
               ))}
+              <NewCategoryRow />
               {showUnassign && <UnassignRow />}
             </ul>
           )}
@@ -157,6 +158,60 @@ function SwimlaneRow({
         aria-hidden
         className={`text-xl transition-colors ${
           isOver ? "text-amber-700" : "text-stone-300"
+        }`}
+      >
+        →
+      </div>
+    </li>
+  );
+}
+
+/**
+ * Drop target that triggers the "create a brand-new category" flow in
+ * the parent CategoryView (which opens the name modal). The row's
+ * dropID is `chip:new` — `<CategoryView>`'s onDragEnd hook routes
+ * `chip:new` to the modal instead of dispatching an assign/unassign
+ * server action directly.
+ */
+function NewCategoryRow() {
+  const { setNodeRef, isOver } = useDroppable({
+    id: "chip:new",
+  });
+  return (
+    <li
+      ref={setNodeRef}
+      className={`flex items-center gap-3 px-3 py-5 transition-colors sm:gap-4 sm:px-4 ${
+        isOver ? "bg-emerald-100" : "bg-emerald-50/50"
+      }`}
+    >
+      <span
+        aria-hidden
+        className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-full border text-xl transition-colors ${
+          isOver
+            ? "border-emerald-500 bg-white text-emerald-700"
+            : "border-emerald-300 bg-white text-emerald-600"
+        }`}
+      >
+        +
+      </span>
+      <div className="min-w-0 flex-1">
+        <h3
+          className="text-lg font-normal text-stone-900"
+          style={{ fontFamily: SERIF }}
+        >
+          New category
+        </h3>
+        <p
+          className="text-[11px] italic text-stone-500"
+          style={{ fontFamily: SERIF }}
+        >
+          Drop here to create a category for this card
+        </p>
+      </div>
+      <div
+        aria-hidden
+        className={`text-xl transition-colors ${
+          isOver ? "text-emerald-700" : "text-stone-300"
         }`}
       >
         →

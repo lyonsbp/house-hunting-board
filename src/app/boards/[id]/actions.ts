@@ -400,6 +400,84 @@ export async function unassignCategory(input: {
   revalidatePath(`/boards/${boardId}`);
 }
 
+const CreateCategoryAndAssignSchema = z.object({
+  boardId: z.string().uuid(),
+  artifactId: z.string().uuid(),
+  /** When dragging from a real category, unassign from it as part of the
+   *  move. Null when dragging from Uncategorized. */
+  sourceCategoryId: z.string().uuid().nullable(),
+  name: z.string().trim().min(1, "Name is required").max(80),
+});
+
+/**
+ * Creates a brand-new category and moves the dragged artifact into it
+ * in one round-trip. Used by the swim-lane panel's "+ New category"
+ * drop target. Returns the new category's id + name so the caller can
+ * compute a slug and redirect.
+ *
+ * Move semantics match the regular `chip:assign` flow: the artifact is
+ * unassigned from its source category (if any) and assigned to the new
+ * one. RLS gates each step on board membership / editor role.
+ */
+export async function createCategoryAndAssign(input: {
+  boardId: string;
+  artifactId: string;
+  sourceCategoryId: string | null;
+  name: string;
+}): Promise<
+  { ok: true; categoryId: string; name: string } | { error: string }
+> {
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const parsed = CreateCategoryAndAssignSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const supabase = await createClient();
+
+  const { data: catRow, error: catErr } = await supabase
+    .from("categories")
+    .insert({ board_id: parsed.data.boardId, name: parsed.data.name })
+    .select("id, name")
+    .single();
+  if (catErr || !catRow) {
+    if (catErr?.code === "23505") {
+      return { error: "That name is already used." };
+    }
+    return { error: catErr?.message ?? "Failed to create category." };
+  }
+
+  // Assign the artifact to the new category. New category has no rows
+  // yet, so sort_order = 0.
+  const { error: assignErr } = await supabase
+    .from("artifact_categories")
+    .upsert(
+      {
+        artifact_id: parsed.data.artifactId,
+        category_id: catRow.id,
+        sort_order: 0,
+      },
+      { onConflict: "artifact_id,category_id", ignoreDuplicates: true },
+    );
+  if (assignErr) return { error: assignErr.message };
+
+  // If the artifact was dragged from a real category, unassign it from
+  // the source. Matches the move semantics of `chip:assign:<id>`.
+  if (parsed.data.sourceCategoryId) {
+    const { error: unErr } = await supabase
+      .from("artifact_categories")
+      .delete()
+      .eq("artifact_id", parsed.data.artifactId)
+      .eq("category_id", parsed.data.sourceCategoryId);
+    if (unErr) return { error: unErr.message };
+  }
+
+  revalidatePath(`/boards/${parsed.data.boardId}`);
+  return { ok: true, categoryId: catRow.id, name: catRow.name };
+}
+
 const ReorderSchema = z.object({
   boardId: z.string().uuid(),
   categoryId: z.string().uuid(),
