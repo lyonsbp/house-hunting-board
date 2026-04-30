@@ -4,6 +4,8 @@ import Link from "next/link";
 import {
   loadBoardCore,
   loadCategoryDrillDown,
+  loadDashboardSummary,
+  signImagePaths,
   UNCATEGORIZED_ID,
 } from "@/lib/board-data";
 import { createClient } from "@/lib/supabase/server";
@@ -27,11 +29,25 @@ export default async function CategoryDrillDownPage({
   const core = await loadBoardCore(supabase, id);
   if (!core) notFound();
 
-  const drill = await loadCategoryDrillDown(supabase, id, categoryId);
+  const [drill, dashboardSummary] = await Promise.all([
+    loadCategoryDrillDown(supabase, id, categoryId),
+    loadDashboardSummary(supabase, id),
+  ]);
   if (!drill) notFound();
 
   const displayName = drill.category?.name ?? "Uncategorized";
   const isUncategorized = categoryId === UNCATEGORIZED_ID;
+
+  // Swim-lane panel: every category except the current one and
+  // Uncategorized (Uncategorized is reachable via the panel's "Remove
+  // from category" row when the current view is a real category).
+  const panelTiles = dashboardSummary.tiles.filter(
+    (t) => t.id !== categoryId && t.id !== UNCATEGORIZED_ID,
+  );
+  const panelThumbPaths = Array.from(
+    new Set(panelTiles.flatMap((t) => t.thumbnailPaths)),
+  );
+  const panelThumbUrls = await signImagePaths(panelThumbPaths);
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
@@ -67,6 +83,8 @@ export default async function CategoryDrillDownPage({
         allCategories={drill.allCategories}
         provenanceByArtifact={drill.provenanceByArtifact}
         canEdit={core.canEdit}
+        panelTiles={panelTiles}
+        panelThumbUrls={panelThumbUrls}
       />
 
       {core.canEdit && <PasteImageListener boardId={id} />}

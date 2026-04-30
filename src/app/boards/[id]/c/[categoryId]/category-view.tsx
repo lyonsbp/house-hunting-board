@@ -32,7 +32,10 @@ import {
   unassignCategory,
 } from "../../actions";
 import { ArtifactCard } from "../../artifact-card";
-import { StickyDragBar } from "./sticky-drag-bar";
+import {
+  SwimlaneDropPanel,
+  type SwimlaneTile,
+} from "./swimlane-drop-panel";
 
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
@@ -59,6 +62,8 @@ export function CategoryView({
   allCategories,
   provenanceByArtifact,
   canEdit,
+  panelTiles,
+  panelThumbUrls,
 }: {
   boardId: string;
   /** Category UUID, or UNCATEGORIZED_ID for the sentinel view. */
@@ -72,6 +77,12 @@ export function CategoryView({
   allCategories: Category[];
   provenanceByArtifact: Record<string, ArtifactProvenance>;
   canEdit: boolean;
+  /**
+   * Other categories (excluding current and Uncategorized) — drives the
+   * swim-lane drop panel that appears during a drag.
+   */
+  panelTiles: SwimlaneTile[];
+  panelThumbUrls: Record<string, string>;
 }) {
   const router = useRouter();
   const [optimistic, setOptimistic] = useState<Artifact[] | null>(null);
@@ -189,9 +200,10 @@ export function CategoryView({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
-      <StickyDragBar
+      <SwimlaneDropPanel
         currentCategoryId={categoryId}
-        allCategories={allCategories}
+        otherTiles={panelTiles}
+        signedThumbUrls={panelThumbUrls}
         dragInProgress={activeId !== null}
         canEdit={canEdit}
       />
