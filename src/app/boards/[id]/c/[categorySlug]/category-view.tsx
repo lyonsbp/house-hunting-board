@@ -134,7 +134,7 @@ export function CategoryView({
 
     const cursor = args.pointerCoordinates;
     if (cursor) {
-      const MAGNET_OFFSET_PX = 100;
+      const MAGNET_OFFSET_PX = 300;
       const inZone: { id: string | number; top: number }[] = [];
       for (const c of args.droppableContainers) {
         if (c.disabled) continue;
