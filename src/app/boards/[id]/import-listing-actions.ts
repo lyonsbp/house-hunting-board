@@ -1,5 +1,3 @@
-"use server";
-
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -65,16 +63,24 @@ const PreviewSchema = z.object({
   url: z.string().trim().url(),
 });
 
-export async function previewListing(
-  _prev: PreviewListingState,
-  formData: FormData,
-): Promise<PreviewListingState> {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
+type SbClient = Awaited<ReturnType<typeof createClient>>;
 
+/**
+ * Pure-function core of `previewListing`. Takes a pre-authenticated user
+ * and a Supabase client (cookie-based for the action wrapper, Bearer-
+ * based for the REST route at /api/listings/preview). No redirects, no
+ * cookie reads — everything that can fail returns a `PreviewListingState`.
+ */
+export async function previewListingCore(input: {
+  boardId: string;
+  url: string;
+  userSub: string;
+  userEmail: string | null;
+  supabase: SbClient;
+}): Promise<PreviewListingState> {
   const parsed = PreviewSchema.safeParse({
-    boardId: formData.get("boardId"),
-    url: formData.get("url"),
+    boardId: input.boardId,
+    url: input.url,
   });
   if (!parsed.success) {
     return {
@@ -99,16 +105,13 @@ export async function previewListing(
   }
 
   // Rate-limit gate. Superadmins listed in SUPERADMIN_EMAILS skip the count.
-  const supabase = await createClient();
-  const exempt = isSuperadminEmail(
-    typeof user.email === "string" ? user.email : null,
-  );
+  const exempt = isSuperadminEmail(input.userEmail);
   if (!exempt) {
     const limit = getDailyScrapeLimit();
-    const { count, error: countError } = await supabase
+    const { count, error: countError } = await input.supabase
       .from("listing_scrapes")
       .select("id", { count: "exact", head: true })
-      .eq("user_id", user.sub)
+      .eq("user_id", input.userSub)
       .gte("created_at", startOfTodayUtc());
     if (countError) {
       return {
@@ -129,12 +132,14 @@ export async function previewListing(
   // Log the scrape attempt before we make the (possibly billable) call.
   // Counting attempts rather than successes prevents a user from burning
   // Scrapfly credits by retrying bad URLs in a loop.
-  const { error: logError } = await supabase.from("listing_scrapes").insert({
-    user_id: user.sub,
-    source: fetcher.source,
-    source_url: parsed.data.url,
-    status: "preview",
-  });
+  const { error: logError } = await input.supabase
+    .from("listing_scrapes")
+    .insert({
+      user_id: input.userSub,
+      source: fetcher.source,
+      source_url: parsed.data.url,
+      status: "preview",
+    });
   if (logError) {
     return {
       status: "error",
@@ -158,7 +163,10 @@ export async function previewListing(
   }
 
   if (preview.images.length > MAX_IMAGES_PER_IMPORT) {
-    preview = { ...preview, images: preview.images.slice(0, MAX_IMAGES_PER_IMPORT) };
+    preview = {
+      ...preview,
+      images: preview.images.slice(0, MAX_IMAGES_PER_IMPORT),
+    };
   }
 
   return {
@@ -167,6 +175,24 @@ export async function previewListing(
     boardId: parsed.data.boardId,
     url: parsed.data.url,
   };
+}
+
+export async function previewListing(
+  _prev: PreviewListingState,
+  formData: FormData,
+): Promise<PreviewListingState> {
+  "use server";
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const supabase = await createClient();
+  return previewListingCore({
+    boardId: String(formData.get("boardId") ?? ""),
+    url: String(formData.get("url") ?? ""),
+    userSub: user.sub,
+    userEmail: typeof user.email === "string" ? user.email : null,
+    supabase,
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -196,30 +222,24 @@ const CommitSchema = z.object({
   cachedPreview: z.unknown(),
 });
 
-export async function commitListingImport(
-  _prev: CommitListingState,
-  formData: FormData,
-): Promise<CommitListingState> {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-
-  const rawSelected = formData.get("selectedImageUrls");
-  const rawCached = formData.get("cachedPreview");
-
-  let selectedImageUrls: unknown;
-  let cachedPreviewParsed: unknown;
-  try {
-    selectedImageUrls = typeof rawSelected === "string" ? JSON.parse(rawSelected) : null;
-    cachedPreviewParsed = typeof rawCached === "string" ? JSON.parse(rawCached) : null;
-  } catch {
-    return { status: "error", message: "Selection payload was malformed." };
-  }
-
+/**
+ * Pure-function core of `commitListingImport`. Takes a pre-authenticated
+ * user and Supabase client (cookie-based for the action wrapper, Bearer-
+ * based for /api/listings/commit). No redirects.
+ */
+export async function commitListingImportCore(input: {
+  boardId: string;
+  url: string;
+  selectedImageUrls: string[];
+  cachedPreview: ListingPreview;
+  userSub: string;
+  supabase: SbClient;
+}): Promise<CommitListingState> {
   const parsed = CommitSchema.safeParse({
-    boardId: formData.get("boardId"),
-    url: formData.get("url"),
-    selectedImageUrls,
-    cachedPreview: cachedPreviewParsed,
+    boardId: input.boardId,
+    url: input.url,
+    selectedImageUrls: input.selectedImageUrls,
+    cachedPreview: input.cachedPreview,
   });
   if (!parsed.success) {
     return {
@@ -228,7 +248,7 @@ export async function commitListingImport(
     };
   }
 
-  const cachedPreview = cachedPreviewParsed as ListingPreview | null;
+  const cachedPreview = input.cachedPreview;
   if (!cachedPreview || !Array.isArray(cachedPreview.images)) {
     return { status: "error", message: "Preview state was missing." };
   }
@@ -246,15 +266,15 @@ export async function commitListingImport(
     }
   }
   const propertySource: ListingSource = cachedPreview.property.source;
+  const supabase = input.supabase;
 
   // Editor check up front (RLS still gates writes; this is for a friendlier
   // error than a generic "violates row-level security policy").
-  const supabase = await createClient();
   const { data: membership } = await supabase
     .from("board_members")
     .select("role")
     .eq("board_id", parsed.data.boardId)
-    .eq("user_id", user.sub)
+    .eq("user_id", input.userSub)
     .maybeSingle();
   if (!membership || (membership.role !== "editor" && membership.role !== "owner")) {
     return {
@@ -386,6 +406,45 @@ export async function commitListingImport(
     errors,
     boardId: parsed.data.boardId,
   };
+}
+
+export async function commitListingImport(
+  _prev: CommitListingState,
+  formData: FormData,
+): Promise<CommitListingState> {
+  "use server";
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const rawSelected = formData.get("selectedImageUrls");
+  const rawCached = formData.get("cachedPreview");
+
+  let selectedImageUrls: unknown;
+  let cachedPreviewParsed: unknown;
+  try {
+    selectedImageUrls = typeof rawSelected === "string" ? JSON.parse(rawSelected) : null;
+    cachedPreviewParsed = typeof rawCached === "string" ? JSON.parse(rawCached) : null;
+  } catch {
+    return { status: "error", message: "Selection payload was malformed." };
+  }
+
+  if (!Array.isArray(selectedImageUrls)) {
+    return { status: "error", message: "Image selection was malformed." };
+  }
+  const cachedPreview = cachedPreviewParsed as ListingPreview | null;
+  if (!cachedPreview) {
+    return { status: "error", message: "Preview state was missing." };
+  }
+
+  const supabase = await createClient();
+  return commitListingImportCore({
+    boardId: String(formData.get("boardId") ?? ""),
+    url: String(formData.get("url") ?? ""),
+    selectedImageUrls: selectedImageUrls as string[],
+    cachedPreview,
+    userSub: user.sub,
+    supabase,
+  });
 }
 
 type ImportOneArgs = {

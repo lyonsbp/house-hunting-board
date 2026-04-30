@@ -1,5 +1,3 @@
-"use server";
-
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -35,6 +33,8 @@ export type RefreshResult =
     }
   | { error: string };
 
+type SbClient = Awaited<ReturnType<typeof createClient>>;
+
 /**
  * Re-scrape an already-imported property and capture the fresh values.
  *
@@ -51,16 +51,21 @@ export type RefreshResult =
  * costs Gemini quota for an arguable benefit. Users can hit "Re-extract"
  * separately if the listing description changed enough to matter.
  */
-export async function refreshListing(input: {
+/**
+ * Pure-function core of `refreshListing`. Pre-authenticated user + Supabase
+ * client (cookie-based for the action wrapper, Bearer-based for
+ * /api/listings/refresh). No redirects — auth fails are caller's problem.
+ */
+export async function refreshListingCore(input: {
   propertyId: string;
+  userSub: string;
+  userEmail: string | null;
+  supabase: SbClient;
 }): Promise<RefreshResult> {
-  const user = await getCurrentUser();
-  if (!user) redirect("/login");
-
-  const parsed = RefreshSchema.safeParse(input);
+  const parsed = RefreshSchema.safeParse({ propertyId: input.propertyId });
   if (!parsed.success) return { error: "Invalid property id." };
 
-  const supabase = await createClient();
+  const supabase = input.supabase;
 
   // Membership: the property must link to an artifact on a board the
   // caller is a member of. RLS on `property_artifacts` already gates
@@ -79,15 +84,13 @@ export async function refreshListing(input: {
     ?.board_id;
 
   // Refresh-only quota gate (separate counter from imports).
-  const exempt = isSuperadminEmail(
-    typeof user.email === "string" ? user.email : null,
-  );
+  const exempt = isSuperadminEmail(input.userEmail);
   if (!exempt) {
     const limit = getDailyRefreshLimit();
     const { count } = await supabase
       .from("listing_scrapes")
       .select("id", { count: "exact", head: true })
-      .eq("user_id", user.sub)
+      .eq("user_id", input.userSub)
       .eq("status", "refresh")
       .gte("created_at", startOfTodayUtc());
     if ((count ?? 0) >= limit) {
@@ -136,7 +139,7 @@ export async function refreshListing(input: {
   // Log the scrape attempt before the (possibly billable) fetcher call so
   // a hot-loop of failed refreshes still counts against the quota.
   await supabase.from("listing_scrapes").insert({
-    user_id: user.sub,
+    user_id: input.userSub,
     source: fetcher.source,
     source_url: property.source_url,
     status: "refresh",
@@ -219,6 +222,22 @@ export async function refreshListing(input: {
     previousStatus: property.status ?? null,
     newStatus,
   };
+}
+
+export async function refreshListing(input: {
+  propertyId: string;
+}): Promise<RefreshResult> {
+  "use server";
+  const user = await getCurrentUser();
+  if (!user) redirect("/login");
+
+  const supabase = await createClient();
+  return refreshListingCore({
+    propertyId: input.propertyId,
+    userSub: user.sub,
+    userEmail: typeof user.email === "string" ? user.email : null,
+    supabase,
+  });
 }
 
 function humanizeDuration(ms: number): string {
