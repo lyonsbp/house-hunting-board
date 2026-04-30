@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import {
   loadBoardCore,
+  loadCanvasPositions,
   loadCategoryDrillDown,
   loadDashboardSummary,
   signImagePaths,
@@ -14,17 +15,22 @@ import { createClient } from "@/lib/supabase/server";
 import { PasteImageListener } from "../../paste-image-listener";
 import { ReadOnlyBanner } from "../../read-only-banner";
 import { RealtimeBridge } from "../../realtime-bridge";
+import { CanvasView } from "./canvas-view";
 import { CategoryView } from "./category-view";
+import { ModeToggle, type ViewMode } from "./mode-toggle";
 
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
 
 export default async function CategoryDrillDownPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string; categorySlug: string }>;
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
 }) {
   const { id, categorySlug } = await params;
+  const sp = await searchParams;
   const supabase = await createClient();
 
   const core = await loadBoardCore(supabase, id);
@@ -50,6 +56,18 @@ export default async function CategoryDrillDownPage({
     resolvedCategoryId = found.id;
   }
 
+  // Mode routing: ?mode=canvas flips the drill-down to freeform layout.
+  // Canvas is unsupported on Uncategorized (no artifact_categories row to
+  // attach a position to) — silently fall back to grid.
+  const rawMode = typeof sp.mode === "string" ? sp.mode : undefined;
+  const mode: ViewMode =
+    rawMode === "canvas" && !isUncategorized ? "canvas" : "grid";
+
+  // ?debug=1 surfaces an on-screen DnD inspector inside whichever
+  // DndContext renders below — for diagnosing why a drop isn't landing.
+  const showDebug =
+    (typeof sp.debug === "string" ? sp.debug : undefined) === "1";
+
   const [drill, dashboardSummary] = await Promise.all([
     loadCategoryDrillDown(supabase, id, resolvedCategoryId),
     loadDashboardSummary(supabase, id),
@@ -57,6 +75,19 @@ export default async function CategoryDrillDownPage({
   if (!drill) notFound();
 
   const displayName = drill.category?.name ?? "Uncategorized";
+
+  // Canvas-only data: positions for each card, lazy-seeded if missing.
+  // Skipped for grid mode and for Uncategorized so we don't write
+  // canvas_x/y rows that no view will read.
+  const canvasPositions =
+    mode === "canvas"
+      ? await loadCanvasPositions(
+          supabase,
+          id,
+          resolvedCategoryId,
+          core.canEdit,
+        )
+      : {};
 
   // Swim-lane panel: every category except the current one and
   // Uncategorized (Uncategorized is reachable via the panel's "Remove
@@ -79,33 +110,54 @@ export default async function CategoryDrillDownPage({
         >
           ← {core.board.name}
         </Link>
-        <h1
-          style={{ fontFamily: SERIF }}
-          className={`text-3xl font-normal leading-tight sm:text-4xl ${
-            isUncategorized ? "italic text-stone-700" : "text-stone-900"
-          }`}
-        >
-          {displayName}
-        </h1>
+        <div className="flex items-center justify-between gap-4">
+          <h1
+            style={{ fontFamily: SERIF }}
+            className={`text-3xl font-normal leading-tight sm:text-4xl ${
+              isUncategorized ? "italic text-stone-700" : "text-stone-900"
+            }`}
+          >
+            {displayName}
+          </h1>
+          {!isUncategorized && <ModeToggle mode={mode} />}
+        </div>
       </header>
 
       {!core.canEdit && <ReadOnlyBanner signedIn={!!core.userId} />}
 
-      <CategoryView
-        boardId={id}
-        categoryId={resolvedCategoryId}
-        categoryName={displayName}
-        artifacts={drill.artifacts}
-        signedImageUrls={drill.signedImageUrls}
-        membershipsByArtifact={drill.membershipsByArtifact}
-        tagsByArtifact={drill.tagsByArtifact}
-        allTags={drill.allTags}
-        allCategories={drill.allCategories}
-        provenanceByArtifact={drill.provenanceByArtifact}
-        canEdit={core.canEdit}
-        panelTiles={panelTiles}
-        panelThumbUrls={panelThumbUrls}
-      />
+      {mode === "canvas" ? (
+        <CanvasView
+          boardId={id}
+          categoryId={resolvedCategoryId}
+          artifacts={drill.artifacts}
+          signedImageUrls={drill.signedImageUrls}
+          membershipsByArtifact={drill.membershipsByArtifact}
+          tagsByArtifact={drill.tagsByArtifact}
+          allTags={drill.allTags}
+          allCategories={drill.allCategories}
+          provenanceByArtifact={drill.provenanceByArtifact}
+          canEdit={core.canEdit}
+          initialPositions={canvasPositions}
+          showDebug={showDebug}
+        />
+      ) : (
+        <CategoryView
+          boardId={id}
+          categoryId={resolvedCategoryId}
+          categoryName={displayName}
+          artifacts={drill.artifacts}
+          signedImageUrls={drill.signedImageUrls}
+          membershipsByArtifact={drill.membershipsByArtifact}
+          tagsByArtifact={drill.tagsByArtifact}
+          allTags={drill.allTags}
+          allCategories={drill.allCategories}
+          provenanceByArtifact={drill.provenanceByArtifact}
+          canEdit={core.canEdit}
+          panelTiles={panelTiles}
+          panelThumbUrls={panelThumbUrls}
+          showDebug={showDebug}
+        />
+      )}
 
       {core.canEdit && <PasteImageListener boardId={id} />}
       <RealtimeBridge boardId={id} />

@@ -5,10 +5,11 @@ import { useRouter } from "next/navigation";
 import {
   DndContext,
   DragOverlay,
+  MeasuringStrategy,
   MouseSensor,
   TouchSensor,
+  closestCenter,
   pointerWithin,
-  rectIntersection,
   useSensor,
   useSensors,
   type CollisionDetection,
@@ -32,6 +33,7 @@ import {
   unassignCategory,
 } from "../../actions";
 import { ArtifactCard } from "../../artifact-card";
+import { DragDebugOverlay } from "./drag-debug-overlay";
 import {
   SwimlaneDropPanel,
   type SwimlaneTile,
@@ -64,6 +66,7 @@ export function CategoryView({
   canEdit,
   panelTiles,
   panelThumbUrls,
+  showDebug = false,
 }: {
   boardId: string;
   /** Category UUID, or UNCATEGORIZED_ID for the sentinel view. */
@@ -83,6 +86,8 @@ export function CategoryView({
    */
   panelTiles: SwimlaneTile[];
   panelThumbUrls: Record<string, string>;
+  /** ?debug=1 turns on the on-screen DnD inspector. */
+  showDebug?: boolean;
 }) {
   const router = useRouter();
   const [optimistic, setOptimistic] = useState<Artifact[] | null>(null);
@@ -97,12 +102,59 @@ export function CategoryView({
     }),
   );
 
-  // pointerWithin gives precise drops on chips/cards under the cursor;
-  // rectIntersection backstops when the pointer leaves all droppables.
+  // Cursor-magnet collision strategy.
+  //
+  // Each chip in the swim-lane panel gets an invisible 200px "magnet
+  // zone" extending upward from its top edge. When the cursor enters
+  // that zone, the chip activates — even though the cursor isn't yet
+  // physically over the row. As the cursor moves further down and
+  // crosses into deeper magnet zones, the *lowermost* chip whose zone
+  // contains the cursor wins, so the selection progresses naturally
+  // (row 1 → row 2 → row 3) as you drag toward the panel.
+  //
+  // We don't rely on the dragged element's rect because with a
+  // <DragOverlay> dnd-kit's collisionRect is the overlay clone (a small
+  // rect centered on the cursor), not the source card's full extent
+  // translated. The cursor + magnet zones give a deterministic
+  // hit-test independent of what dnd-kit thinks the dragged rect is.
+  //
+  // Cursor on a chip or card always wins over the magnet zone, so
+  // precise drops keep working: hover any chip directly to lock onto
+  // it; hover a grid card to reorder.
   const collisionDetection: CollisionDetection = (args) => {
     const pointer = pointerWithin(args);
-    if (pointer.length > 0) return pointer;
-    return rectIntersection(args);
+    const pointerChips = pointer.filter((c) =>
+      String(c.id).startsWith("chip:"),
+    );
+    if (pointerChips.length > 0) return pointerChips;
+    const pointerCards = pointer.filter(
+      (c) => !String(c.id).startsWith("chip:"),
+    );
+    if (pointerCards.length > 0) return pointerCards;
+
+    const cursor = args.pointerCoordinates;
+    if (cursor) {
+      const MAGNET_OFFSET_PX = 100;
+      const inZone: { id: string | number; top: number }[] = [];
+      for (const c of args.droppableContainers) {
+        if (c.disabled) continue;
+        const id = String(c.id);
+        if (!id.startsWith("chip:")) continue;
+        const rect = args.droppableRects.get(c.id);
+        if (!rect) continue;
+        const zoneTop = rect.top - MAGNET_OFFSET_PX;
+        const zoneBottom = rect.bottom;
+        if (cursor.y >= zoneTop && cursor.y <= zoneBottom) {
+          inZone.push({ id: c.id, top: rect.top });
+        }
+      }
+      if (inZone.length > 0) {
+        inZone.sort((a, b) => b.top - a.top);
+        return [{ id: inZone[0].id }];
+      }
+    }
+
+    return closestCenter(args);
   };
 
   const activeArtifact = activeId
@@ -199,6 +251,11 @@ export function CategoryView({
       onDragStart={handleDragStart}
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
+      // Force droppable rect re-measurement every render so the swim-lane
+      // panel's chips have correct hit-test bounds during the slide-in
+      // animation. Without this, only the rect-stable top row gets hits;
+      // the rest stay associated with their off-screen pre-slide positions.
+      measuring={{ droppable: { strategy: MeasuringStrategy.Always } }}
     >
       <SwimlaneDropPanel
         currentCategoryId={categoryId}
@@ -260,6 +317,7 @@ export function CategoryView({
           </div>
         ) : null}
       </DragOverlay>
+      {showDebug && <DragDebugOverlay />}
     </DndContext>
   );
 }

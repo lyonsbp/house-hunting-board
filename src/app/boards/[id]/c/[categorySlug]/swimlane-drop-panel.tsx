@@ -71,16 +71,15 @@ export function SwimlaneDropPanel({
               No other categories yet.
             </p>
           ) : (
-            <ul className="flex flex-col gap-2">
+            <ul className="flex flex-col divide-y divide-stone-200 overflow-hidden rounded-lg border border-stone-200">
               {otherTiles.map((t) => (
                 <SwimlaneRow
                   key={t.id}
                   tile={t}
                   signedThumbUrls={signedThumbUrls}
-                  disabled={!dragInProgress}
                 />
               ))}
-              {showUnassign && <UnassignRow disabled={!dragInProgress} />}
+              {showUnassign && <UnassignRow />}
             </ul>
           )}
         </div>
@@ -92,15 +91,17 @@ export function SwimlaneDropPanel({
 function SwimlaneRow({
   tile,
   signedThumbUrls,
-  disabled,
 }: {
   tile: SwimlaneTile;
   signedThumbUrls: Record<string, string>;
-  disabled: boolean;
 }) {
+  // Always register the droppable. The panel hides via translate-y-full
+  // when no drag is in progress, so the chip is visually unreachable
+  // anyway — and keeping the droppable always registered avoids a
+  // registration race during the slide-in animation that left only the
+  // top row hit-testable.
   const { setNodeRef, isOver } = useDroppable({
     id: `chip:assign:${tile.id}`,
-    disabled,
   });
   const thumbs = tile.thumbnailPaths
     .map((p) => signedThumbUrls[p])
@@ -110,10 +111,8 @@ function SwimlaneRow({
   return (
     <li
       ref={setNodeRef}
-      className={`flex items-center gap-3 rounded-lg border-2 px-3 py-3 transition-colors sm:gap-4 sm:px-4 ${
-        isOver
-          ? "border-amber-400 bg-amber-50"
-          : "border-stone-200 bg-stone-50/60"
+      className={`flex items-center gap-3 px-3 py-5 transition-colors sm:gap-4 sm:px-4 ${
+        isOver ? "bg-amber-100" : "bg-stone-50/60"
       }`}
     >
       <div className="min-w-0 flex-1">
@@ -166,18 +165,15 @@ function SwimlaneRow({
   );
 }
 
-function UnassignRow({ disabled }: { disabled: boolean }) {
+function UnassignRow() {
   const { setNodeRef, isOver } = useDroppable({
     id: "chip:unassign",
-    disabled,
   });
   return (
     <li
       ref={setNodeRef}
-      className={`flex items-center gap-3 rounded-lg border-2 px-3 py-3 transition-colors sm:gap-4 sm:px-4 ${
-        isOver
-          ? "border-stone-700 bg-stone-200"
-          : "border-stone-200 bg-white"
+      className={`flex items-center gap-3 px-3 py-5 transition-colors sm:gap-4 sm:px-4 ${
+        isOver ? "bg-stone-300" : "bg-white"
       }`}
     >
       <div className="flex-1">

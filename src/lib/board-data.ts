@@ -3,9 +3,21 @@ import { toArtifact, type Artifact, type ArtifactRow } from "@/lib/artifacts";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
-import { UNCATEGORIZED_ID } from "./board-data-shared";
+import {
+  CANVAS_CARD_H,
+  CANVAS_CARD_W,
+  CANVAS_GAP,
+  UNCATEGORIZED_ID,
+  type CanvasPosition,
+} from "./board-data-shared";
 
-export { UNCATEGORIZED_ID };
+export {
+  CANVAS_CARD_H,
+  CANVAS_CARD_W,
+  CANVAS_GAP,
+  UNCATEGORIZED_ID,
+  type CanvasPosition,
+};
 
 type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
@@ -397,6 +409,92 @@ export async function loadCategoryDrillDown(
     provenanceByArtifact,
     signedImageUrls,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Canvas mode positions — per-category freeform x/y for cards
+// ---------------------------------------------------------------------------
+
+const CANVAS_COLS = 4;
+
+/**
+ * Loads (and lazily seeds) canvas positions for every artifact in a
+ * category. Returns a map of `artifactId -> {x, y}` covering every row
+ * for the category, including ones that just got seeded in-memory for
+ * read-only viewers.
+ *
+ * Seeding rule: any row whose `canvas_x` is null gets placed in a
+ * 4-wide grid driven by `sort_order`. If the viewer can edit, the
+ * seeded values are persisted (idempotent — only fills nulls). If they
+ * can't, the seeds live only in this response so the canvas still
+ * renders sanely.
+ *
+ * Uncategorized has no rows in `artifact_categories`, so this function
+ * returns an empty map for `categoryId === UNCATEGORIZED_ID`. Canvas
+ * mode is unsupported there.
+ */
+export async function loadCanvasPositions(
+  supabase: ServerClient,
+  boardId: string,
+  categoryId: string,
+  canEdit: boolean,
+): Promise<Record<string, CanvasPosition>> {
+  if (categoryId === UNCATEGORIZED_ID) return {};
+
+  const { data: rows } = await supabase
+    .from("artifact_categories")
+    .select(
+      "artifact_id, canvas_x, canvas_y, sort_order, artifacts!inner(board_id)",
+    )
+    .eq("category_id", categoryId)
+    .eq("artifacts.board_id", boardId);
+
+  const positions: Record<string, CanvasPosition> = {};
+  const toSeed: { artifactId: string; sortOrder: number }[] = [];
+
+  for (const r of rows ?? []) {
+    if (r.canvas_x !== null && r.canvas_y !== null) {
+      positions[r.artifact_id] = { x: r.canvas_x, y: r.canvas_y };
+    } else {
+      toSeed.push({
+        artifactId: r.artifact_id,
+        sortOrder: r.sort_order ?? 0,
+      });
+    }
+  }
+
+  if (toSeed.length === 0) return positions;
+
+  // Compute seed positions in a 4-wide grid driven by sort_order.
+  const seeds = toSeed.map((s) => {
+    const col = s.sortOrder % CANVAS_COLS;
+    const row = Math.floor(s.sortOrder / CANVAS_COLS);
+    return {
+      artifactId: s.artifactId,
+      x: col * (CANVAS_CARD_W + CANVAS_GAP),
+      y: row * (CANVAS_CARD_H + CANVAS_GAP),
+    };
+  });
+
+  for (const s of seeds) {
+    positions[s.artifactId] = { x: s.x, y: s.y };
+  }
+
+  // Persist only if the viewer can edit. RLS still gates per row, so
+  // this is the same authorization boundary as a manual drag.
+  if (canEdit) {
+    await Promise.all(
+      seeds.map((s) =>
+        supabase
+          .from("artifact_categories")
+          .update({ canvas_x: s.x, canvas_y: s.y })
+          .eq("artifact_id", s.artifactId)
+          .eq("category_id", categoryId),
+      ),
+    );
+  }
+
+  return positions;
 }
 
 // ---------------------------------------------------------------------------
