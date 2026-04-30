@@ -1,6 +1,8 @@
 import Link from "next/link";
 
 import type { CategoryTile as CategoryTileData } from "@/lib/board-data";
+import { UNCATEGORIZED_ID } from "@/lib/board-data-shared";
+import { slugify } from "@/lib/slug";
 
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
@@ -10,24 +12,61 @@ const SERIF =
  * area. At rest the cards are a slightly-staggered "deck" stacked at
  * the center; on desktop hover they fan out into a hand of cards.
  *
- * `transform-origin: bottom center` makes the rotation feel like the
- * cards are pivoting at the dealer's grip — that's the natural fan
- * geometry. Mobile/touch never hits hover so the rest state has to read
- * cleanly on its own.
+ * Two design rules:
+ *  1. The TOP card (highest z-index, last rendered) is always tilted
+ *     the same direction at rest (+2deg) regardless of how many cards
+ *     are shown — keeps the visual signature consistent.
+ *  2. Single-image tiles don't fan; they zoom slightly on hover. A
+ *     single card has nothing to fan against, so a scale-up reads
+ *     better than a static rotation.
+ *
+ * `transform-origin: bottom center` makes rotation feel like the cards
+ * are pivoting at a dealer's grip. Mobile/touch never hits hover, so
+ * the rest state has to read cleanly on its own.
  */
-const REST_TRANSFORMS = [
-  { x: 0, y: 0, rot: -3 },
-  { x: 0, y: -2, rot: -1 },
-  { x: 0, y: -3, rot: 1 },
-  { x: 0, y: -4, rot: 3 },
-] as const;
+type Transform = { x: number; y: number; rot: number };
 
-const FAN_TRANSFORMS = [
-  { x: -22, y: 4, rot: -18 },
-  { x: -8, y: -2, rot: -6 },
-  { x: 8, y: -2, rot: 6 },
-  { x: 22, y: 4, rot: 18 },
-] as const;
+const REST_BY_COUNT: Record<number, readonly Transform[]> = {
+  1: [{ x: 0, y: -2, rot: 2 }],
+  2: [
+    { x: 0, y: 0, rot: -2 },
+    { x: 0, y: -3, rot: 2 },
+  ],
+  3: [
+    { x: 0, y: 0, rot: -3 },
+    { x: 0, y: -2, rot: 0 },
+    { x: 0, y: -3, rot: 2 },
+  ],
+  4: [
+    { x: 0, y: 0, rot: -3 },
+    { x: 0, y: -1, rot: -1 },
+    { x: 0, y: -2, rot: 1 },
+    { x: 0, y: -3, rot: 2 },
+  ],
+};
+
+const FAN_BY_COUNT: Record<number, readonly Transform[]> = {
+  // Single card: same position as rest. Hover scale is applied via
+  // --fan-scale below; this entry just keeps the var setup uniform.
+  1: [{ x: 0, y: -2, rot: 2 }],
+  2: [
+    { x: -14, y: 4, rot: -10 },
+    { x: 14, y: 4, rot: 10 },
+  ],
+  3: [
+    { x: -16, y: 4, rot: -14 },
+    { x: 0, y: -3, rot: 0 },
+    { x: 16, y: 4, rot: 14 },
+  ],
+  4: [
+    { x: -22, y: 4, rot: -18 },
+    { x: -8, y: -2, rot: -6 },
+    { x: 8, y: -2, rot: 6 },
+    { x: 22, y: 4, rot: 18 },
+  ],
+};
+
+const SINGLE_HOVER_SCALE = "1.08";
 
 export function CategoryTile({
   boardId,
@@ -38,7 +77,9 @@ export function CategoryTile({
   tile: CategoryTileData;
   signedThumbUrls: Record<string, string>;
 }) {
-  const href = `/boards/${boardId}/c/${tile.id}`;
+  const slug =
+    tile.id === UNCATEGORIZED_ID ? UNCATEGORIZED_ID : slugify(tile.name);
+  const href = `/boards/${boardId}/c/${slug}`;
   const usableThumbs = tile.thumbnailPaths
     .map((path) => signedThumbUrls[path])
     .filter((url): url is string => !!url)
@@ -52,7 +93,7 @@ export function CategoryTile({
       className="group flex flex-col gap-3 rounded-xl border border-stone-200 bg-white p-3 transition-shadow duration-300 [@media(hover:hover)]:hover:shadow-[0_8px_28px_-12px_rgba(0,0,0,0.18)]"
     >
       <div
-        className={`relative aspect-[4/3] overflow-hidden rounded-lg ${
+        className={`fan-deck relative aspect-[4/3] overflow-hidden rounded-lg ${
           isEmpty || !hasThumbs ? "bg-stone-50" : "bg-stone-100"
         }`}
       >
@@ -71,37 +112,42 @@ export function CategoryTile({
             {tile.count} {tile.count === 1 ? "item" : "items"}
           </div>
         ) : (
-          usableThumbs.map((url, i) => {
-            const rest = REST_TRANSFORMS[i] ?? REST_TRANSFORMS[3];
-            const fan = FAN_TRANSFORMS[i] ?? FAN_TRANSFORMS[3];
-            return (
-              <div
-                key={i}
-                style={
-                  {
-                    "--rest-x": `${rest.x}%`,
-                    "--rest-y": `${rest.y}%`,
-                    "--rest-rot": `${rest.rot}deg`,
-                    "--fan-x": `${fan.x}%`,
-                    "--fan-y": `${fan.y}%`,
-                    "--fan-rot": `${fan.rot}deg`,
-                    transform:
-                      "translate(var(--rest-x), var(--rest-y)) rotate(var(--rest-rot))",
-                    zIndex: i + 1,
-                  } as React.CSSProperties
-                }
-                className="absolute inset-x-[18%] inset-y-[14%] origin-bottom overflow-hidden rounded-md border-2 border-white shadow-md transition-transform duration-300 ease-out [@media(hover:hover)]:group-hover:[transform:translate(var(--fan-x),var(--fan-y))_rotate(var(--fan-rot))]"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={url}
-                  alt=""
-                  className="h-full w-full object-cover"
-                  loading="lazy"
-                />
-              </div>
-            );
-          })
+          (() => {
+            const count = usableThumbs.length as 1 | 2 | 3 | 4;
+            const restList = REST_BY_COUNT[count] ?? REST_BY_COUNT[4];
+            const fanList = FAN_BY_COUNT[count] ?? FAN_BY_COUNT[4];
+            const fanScale = count === 1 ? SINGLE_HOVER_SCALE : "1";
+            return usableThumbs.map((url, i) => {
+              const rest = restList[i] ?? restList[restList.length - 1];
+              const fan = fanList[i] ?? fanList[fanList.length - 1];
+              return (
+                <div
+                  key={i}
+                  style={
+                    {
+                      "--rest-x": `${rest.x}%`,
+                      "--rest-y": `${rest.y}%`,
+                      "--rest-rot": `${rest.rot}deg`,
+                      "--fan-x": `${fan.x}%`,
+                      "--fan-y": `${fan.y}%`,
+                      "--fan-rot": `${fan.rot}deg`,
+                      "--fan-scale": fanScale,
+                      zIndex: i + 1,
+                    } as React.CSSProperties
+                  }
+                  className="fan-card absolute inset-x-[18%] inset-y-[14%] origin-bottom overflow-hidden rounded-md border-2 border-white shadow-md transition-transform duration-300 ease-out"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={url}
+                    alt=""
+                    className="h-full w-full object-cover"
+                    loading="lazy"
+                  />
+                </div>
+              );
+            });
+          })()
         )}
       </div>
       <div className="flex items-baseline justify-between gap-3 px-1">

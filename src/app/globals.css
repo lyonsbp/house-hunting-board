@@ -5,3 +5,27 @@
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }
+
+/*
+ * Dashboard category-tile fan-out hover.
+ *
+ * Each thumbnail sets its rest/fan transform values as CSS variables in
+ * its inline style. The transform itself is applied via class so a
+ * group-hover rule can override it — inline style would win over a
+ * Tailwind hover variant. Gated to hover-capable devices so touch
+ * doesn't trip it on long-press.
+ */
+.fan-card {
+  transform:
+    translate(var(--rest-x), var(--rest-y))
+    rotate(var(--rest-rot))
+    scale(var(--rest-scale, 1));
+}
+@media (hover: hover) {
+  .fan-deck:hover .fan-card {
+    transform:
+      translate(var(--fan-x), var(--fan-y))
+      rotate(var(--fan-rot))
+      scale(var(--fan-scale, 1));
+  }
+}
