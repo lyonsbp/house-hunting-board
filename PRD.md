@@ -187,6 +187,38 @@ counts as 1; a Remix of N variants counts as N). Counter derived from
 remaining quota for the week and disables submit at zero. No dollar-based
 billing yet — invocation count is a simpler proxy and easier to explain.
 
+### 5.3a Reference images for AI generation (M8)
+
+Extends Edit and Remix so the user can attach **reference images**
+alongside the written prompt — examples of style, color palette,
+materials, fixture size, or location aesthetic the model should mimic.
+The references condition the output but are not themselves edited; only
+the original source image is the subject. Typical flow: user picks a
+backyard photo as the source, types *"add a small pool with a tanning
+ledge"*, and drags in two pool photos they pinned earlier as style
+references → Remix returns three variations that match the source's
+geometry but borrow tile color and ledge shape from the references.
+
+References can come from two places: (1) **existing artifacts on the
+board** (picker shows recent images, filterable by category/tag — reuses
+the same image-picker component as the listing import), or (2) **fresh
+uploads** that go straight to Supabase Storage as ordinary `image`
+artifacts in an "AI references" auto-category, so they're durable and
+reusable across future generations.
+
+**Model fit**: Gemini 2.5 Flash Image natively accepts multi-image input
+and is the primary path. FLUX Kontext supports a single edit subject;
+for the FLUX fallback we collapse references into the prompt as a
+text-described style summary (cheap LLM pass) rather than passing the
+images. The `ImageEditor` interface gains a `references: ArtifactRef[]`
+field; each backend decides how to use them.
+
+**Schema**: a new `ai_edit_references` join table — `(ai_edit_id,
+artifact_id, role)` where `role` is `source` | `reference` — so the
+lineage on `ai_edits` captures every input, not just the parent. Cost
+guardrail unchanged: each invocation still counts as 1 (Edit) or N
+(Remix) regardless of reference count.
+
 ### 5.4 Price Analytics (post-MVP, schema-prepared at MVP)
 
 Goal: answer questions like *"how much does X feature cost on average?"* —
@@ -260,3 +292,4 @@ Cloudflare Workers (cron + queue consumers)
 | **M5** | Price analytics UI (cohort table + per-metro filter + chip drilldown) |
 | **M6** | Drill-down dashboard: category-tile dashboard + nested slug route + swim-lane drop panel + fan-out hover + click-after-drag guard |
 | **M7** | Canvas mode: per-category freeform pin board + lazy seed-from-grid + reset + resizable viewport (migration `0013`) |
+| **M8** | Reference images for AI generation: multi-image prompt conditioning for Edit/Remix + `ai_edit_references` join table + board-artifact picker / fresh-upload paths |
