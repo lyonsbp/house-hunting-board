@@ -87,12 +87,18 @@ export class FluxKontextEditor implements ImageEditor {
 
     const results: ImageEditResult[] = [];
     const errors: string[] = [];
-    for (const r of settled) {
-      if (r.status === "fulfilled") results.push(r.value);
-      else
-        errors.push(
-          r.reason instanceof Error ? r.reason.message : String(r.reason),
-        );
+    for (let i = 0; i < settled.length; i++) {
+      const r = settled[i];
+      if (r.status === "fulfilled") {
+        results.push(r.value);
+      } else {
+        const msg =
+          r.reason instanceof Error ? r.reason.message : String(r.reason);
+        errors.push(msg);
+        // Surface in worker logs (`wrangler tail`) — the action layer only
+        // sees the first error string, not all of them.
+        console.error(`[flux] variant ${i} failed:`, msg);
+      }
     }
     if (results.length === 0) {
       throw new Error(
