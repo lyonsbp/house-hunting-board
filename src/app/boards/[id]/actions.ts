@@ -7,6 +7,8 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { getCurrentUser } from "@/lib/auth";
+import { UNCATEGORIZED_ID } from "@/lib/board-data-shared";
+import { slugify } from "@/lib/slug";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -244,6 +246,7 @@ export async function createLinkArtifact(
 const ImageSchema = z.object({
   boardId: z.string().uuid(),
   caption: z.string().trim().max(1000).optional(),
+  categoryId: z.string().uuid().optional(),
 });
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -254,16 +257,32 @@ const ALLOWED_IMAGE_TYPES = new Set([
 ]);
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024; // 10MB
 
+/**
+ * Image-specific superset of CreateArtifactState. After a successful
+ * upload we surface where the image landed (category name + slug) so the
+ * form can render a toast linking to that category's drill-down.
+ */
+export type CreateImageArtifactState =
+  | { status: "idle" }
+  | { status: "error"; message: string }
+  | {
+      status: "success";
+      categoryId: string | null;
+      categoryName: string;
+      categorySlug: string;
+    };
+
 export async function createImageArtifact(
-  _prev: CreateArtifactState,
+  _prev: CreateImageArtifactState,
   formData: FormData,
-): Promise<CreateArtifactState> {
+): Promise<CreateImageArtifactState> {
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
   const parsed = ImageSchema.safeParse({
     boardId: formData.get("boardId"),
     caption: formData.get("caption") || undefined,
+    categoryId: formData.get("categoryId") || undefined,
   });
   if (!parsed.success) {
     return {
@@ -297,19 +316,73 @@ export async function createImageArtifact(
     return { status: "error", message: uploadError.message };
   }
 
-  const insertError = await insertArtifact(parsed.data.boardId, {
-    kind: "image",
-    storage_path: path,
-    body: parsed.data.caption ?? null,
-  });
-  if (insertError) {
-    // Try to clean up the orphaned object on insert failure.
+  // Inline-insert here (instead of using insertArtifact) so we can grab
+  // the new artifact id and chain it into artifact_categories when the
+  // user picked a target category.
+  const { data: inserted, error: insertError } = await supabase
+    .from("artifacts")
+    .insert({
+      board_id: parsed.data.boardId,
+      kind: "image",
+      storage_path: path,
+      body: parsed.data.caption ?? null,
+    })
+    .select("id")
+    .single();
+  if (insertError || !inserted) {
     await supabase.storage.from("artifacts").remove([path]);
-    return { status: "error", message: insertError.message };
+    return {
+      status: "error",
+      message: insertError?.message ?? "Failed to save image.",
+    };
+  }
+
+  // Category assignment (optional). If it fails we fall back to
+  // Uncategorized — the image is already uploaded and visible, so a
+  // failed assignment shouldn't be a hard error.
+  let landingCategoryId: string | null = null;
+  let landingCategoryName = "Uncategorized";
+  let landingCategorySlug: string = UNCATEGORIZED_ID;
+
+  if (parsed.data.categoryId) {
+    const { data: maxRow } = await supabase
+      .from("artifact_categories")
+      .select("sort_order")
+      .eq("category_id", parsed.data.categoryId)
+      .order("sort_order", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    const nextSortOrder = (maxRow?.sort_order ?? -1) + 1;
+
+    const { error: assignError } = await supabase
+      .from("artifact_categories")
+      .insert({
+        artifact_id: inserted.id,
+        category_id: parsed.data.categoryId,
+        sort_order: nextSortOrder,
+      });
+
+    if (!assignError) {
+      const { data: cat } = await supabase
+        .from("categories")
+        .select("name")
+        .eq("id", parsed.data.categoryId)
+        .maybeSingle();
+      if (cat) {
+        landingCategoryId = parsed.data.categoryId;
+        landingCategoryName = cat.name;
+        landingCategorySlug = slugify(cat.name);
+      }
+    }
   }
 
   revalidatePath(`/boards/${parsed.data.boardId}`);
-  return { status: "idle" };
+  return {
+    status: "success",
+    categoryId: landingCategoryId,
+    categoryName: landingCategoryName,
+    categorySlug: landingCategorySlug,
+  };
 }
 
 export async function deleteArtifact(formData: FormData) {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useActionState, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { Button } from "@heroui/react";
 
 import {
@@ -9,10 +10,14 @@ import {
   createNoteArtifact,
   createTextArtifact,
   type CreateArtifactState,
+  type CreateImageArtifactState,
 } from "./actions";
 import { ListingForm } from "./listing-form";
 
 const initialState: CreateArtifactState = { status: "idle" };
+const imageInitialState: CreateImageArtifactState = { status: "idle" };
+
+type CategoryOption = { id: string; name: string };
 
 const KINDS = [
   { id: "note", label: "Note" },
@@ -26,7 +31,13 @@ type KindId = (typeof KINDS)[number]["id"];
 const inputCls =
   "w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200";
 
-export function AddArtifact({ boardId }: { boardId: string }) {
+export function AddArtifact({
+  boardId,
+  categories,
+}: {
+  boardId: string;
+  categories: CategoryOption[];
+}) {
   const [active, setActive] = useState<KindId>("note");
 
   return (
@@ -61,7 +72,9 @@ export function AddArtifact({ boardId }: { boardId: string }) {
         {active === "note" && <NoteForm boardId={boardId} />}
         {active === "text" && <TextForm boardId={boardId} />}
         {active === "link" && <LinkForm boardId={boardId} />}
-        {active === "image" && <ImageForm boardId={boardId} />}
+        {active === "image" && (
+          <ImageForm boardId={boardId} categories={categories} />
+        )}
         {active === "listing" && <ListingForm boardId={boardId} />}
       </div>
     </div>
@@ -168,36 +181,117 @@ function LinkForm({ boardId }: { boardId: string }) {
   );
 }
 
-function ImageForm({ boardId }: { boardId: string }) {
+function ImageForm({
+  boardId,
+  categories,
+}: {
+  boardId: string;
+  categories: CategoryOption[];
+}) {
   const [state, action, pending] = useActionState(
     createImageArtifact,
-    initialState,
+    imageInitialState,
   );
   const formRef = useRef<HTMLFormElement>(null);
-  useResetOnSuccess(state, pending, formRef);
+
+  // Reset the form after each successful submit so the user can add
+  // another image without manually clearing the file input. Distinct
+  // from useResetOnSuccess because our state union has a "success"
+  // variant the other forms don't.
+  useEffect(() => {
+    if ((state.status === "idle" || state.status === "success") && !pending) {
+      formRef.current?.reset();
+    }
+  }, [state, pending]);
 
   return (
-    <form ref={formRef} action={action} className="flex flex-col gap-3">
-      <input type="hidden" name="boardId" value={boardId} />
-      <input
-        name="file"
-        type="file"
-        accept="image/jpeg,image/png,image/webp,image/gif"
-        required
-        className="block w-full cursor-pointer rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-stone-900 file:px-3 file:py-1.5 file:text-xs file:uppercase file:tracking-wider file:text-stone-50 hover:border-stone-300"
-      />
-      <input
-        name="caption"
-        placeholder="Caption (optional)"
-        maxLength={1000}
-        className={inputCls}
-      />
-      {state.status === "error" && <ErrorLine message={state.message} />}
-      <div>
-        <Button type="submit" variant="primary" isDisabled={pending}>
-          {pending ? "Uploading…" : "Upload image"}
-        </Button>
-      </div>
-    </form>
+    <>
+      <form ref={formRef} action={action} className="flex flex-col gap-3">
+        <input type="hidden" name="boardId" value={boardId} />
+        <input
+          name="file"
+          type="file"
+          accept="image/jpeg,image/png,image/webp,image/gif"
+          required
+          className="block w-full cursor-pointer rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-stone-900 file:px-3 file:py-1.5 file:text-xs file:uppercase file:tracking-wider file:text-stone-50 hover:border-stone-300"
+        />
+        <input
+          name="caption"
+          placeholder="Caption (optional)"
+          maxLength={1000}
+          className={inputCls}
+        />
+        <select
+          name="categoryId"
+          defaultValue=""
+          className={inputCls}
+          aria-label="Add to category"
+        >
+          <option value="">Uncategorized</option>
+          {categories.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.name}
+            </option>
+          ))}
+        </select>
+        {state.status === "error" && <ErrorLine message={state.message} />}
+        <div>
+          <Button type="submit" variant="primary" isDisabled={pending}>
+            {pending ? "Uploading…" : "Upload image"}
+          </Button>
+        </div>
+      </form>
+      <ImageUploadToast boardId={boardId} state={state} />
+    </>
+  );
+}
+
+function ImageUploadToast({
+  boardId,
+  state,
+}: {
+  boardId: string;
+  state: CreateImageArtifactState;
+}) {
+  const [visible, setVisible] = useState<{
+    name: string;
+    slug: string;
+  } | null>(null);
+
+  useEffect(() => {
+    if (state.status !== "success") return;
+    setVisible({ name: state.categoryName, slug: state.categorySlug });
+    const t = setTimeout(() => setVisible(null), 5000);
+    return () => clearTimeout(t);
+  }, [state]);
+
+  if (!visible) return null;
+
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="fixed left-1/2 top-6 z-50 flex -translate-x-1/2 items-center gap-3 rounded-full border border-stone-200 bg-white/95 px-4 py-2 text-sm text-stone-700 shadow-lg backdrop-blur-sm"
+    >
+      <span>
+        Image added to{" "}
+        <span className="font-medium text-stone-900">{visible.name}</span>
+      </span>
+      <Link
+        href={`/boards/${boardId}/c/${visible.slug}`}
+        className="text-[11px] uppercase tracking-wider text-amber-700 hover:text-amber-900"
+        style={{ letterSpacing: "0.12em" }}
+      >
+        View →
+      </Link>
+      <button
+        type="button"
+        onClick={() => setVisible(null)}
+        aria-label="Dismiss"
+        className="text-stone-400 hover:text-stone-700"
+      >
+        ×
+      </button>
+    </div>
   );
 }

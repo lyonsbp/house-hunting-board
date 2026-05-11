@@ -313,7 +313,12 @@ export default async function BoardPage({
       )}
 
       <section className="space-y-6">
-        {canEdit && <AddArtifact boardId={board.id} />}
+        {canEdit && (
+          <AddArtifact
+            boardId={board.id}
+            categories={categoriesData ?? []}
+          />
+        )}
         <DashboardGrid
           boardId={board.id}
           summary={dashboardSummary}
