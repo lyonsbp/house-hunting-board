@@ -21,7 +21,12 @@ export function scrapflyAvailable(): boolean {
 
 export async function fetchViaScrapfly(
   targetUrl: string,
-  opts: { timeoutMs?: number; renderJs?: boolean; country?: string } = {},
+  opts: {
+    timeoutMs?: number;
+    renderJs?: boolean;
+    country?: string;
+    autoScroll?: boolean;
+  } = {},
 ): Promise<{ html: string; finalUrl: string }> {
   const key = process.env.SCRAPFLY_API_KEY;
   if (!key) {
@@ -39,6 +44,12 @@ export async function fetchViaScrapfly(
     // Don't bill us for assets we don't use. We only need the HTML.
     cache: "false",
   });
+  // Scrapfly's auto-scroll triggers lazy-loaded content (e.g. Zillow's full
+  // photo gallery, which only fetches photos beyond the first ~50 once the
+  // user scrolls into the viewer). Only valid alongside render_js=true.
+  if (opts.autoScroll && (opts.renderJs ?? true)) {
+    params.set("auto_scroll", "true");
+  }
 
   const ctrl = new AbortController();
   const timer = setTimeout(

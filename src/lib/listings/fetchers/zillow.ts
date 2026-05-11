@@ -24,7 +24,10 @@ export class ZillowFetcher implements ListingFetcher {
 
   async fetchAndParse(url: string): Promise<ListingPreview> {
     if (scrapflyAvailable()) {
-      const { html, finalUrl } = await fetchViaScrapfly(url, { renderJs: true });
+      const { html, finalUrl } = await fetchViaScrapfly(url, {
+        renderJs: true,
+        autoScroll: true,
+      });
       return parseZillow(html, finalUrl);
     }
     const { html, finalUrl } = await fetchListingHtml(url);

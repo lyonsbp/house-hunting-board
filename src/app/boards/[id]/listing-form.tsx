@@ -8,9 +8,11 @@ import type { ListingPreview } from "@/lib/listings/types";
 import {
   commitListingImport,
   previewListing,
-  type CommitListingState,
-  type PreviewListingState,
 } from "./import-listing-actions";
+import type {
+  CommitListingState,
+  PreviewListingState,
+} from "./import-listing-types";
 
 const previewInitial: PreviewListingState = { status: "idle" };
 const commitInitial: CommitListingState = { status: "idle" };
@@ -94,9 +96,7 @@ function ListingPicker({
   preview: ListingPreview;
   onDismiss: () => void;
 }) {
-  const [selected, setSelected] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(preview.images.map((img) => [img.url, true])),
-  );
+  const [selected, setSelected] = useState<Record<string, boolean>>({});
   const [showErrors, setShowErrors] = useState(false);
   const [commitState, commitAction, commitPending] = useActionState(
     commitListingImport,

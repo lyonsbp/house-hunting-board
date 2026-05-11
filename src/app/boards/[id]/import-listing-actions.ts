@@ -1,3 +1,5 @@
+"use server";
+
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -19,8 +21,12 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
 import { runExtraction } from "./feature-actions";
+import type {
+  CommitListingState,
+  PreviewListingState,
+} from "./import-listing-types";
 
-const MAX_IMAGES_PER_IMPORT = 60;
+const MAX_IMAGES_PER_IMPORT = 250;
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const PER_IMAGE_TIMEOUT_MS = 10_000;
 const DOWNLOAD_CONCURRENCY = 6;
@@ -36,27 +42,6 @@ const ALLOWED_IMAGE_TYPES: Record<string, string> = {
 // ---------------------------------------------------------------------------
 // previewListing
 // ---------------------------------------------------------------------------
-
-export type PreviewListingState =
-  | { status: "idle" }
-  | {
-      status: "ready";
-      preview: ListingPreview;
-      boardId: string;
-      url: string;
-    }
-  | {
-      status: "error";
-      code:
-        | "unsupported"
-        | "blocked"
-        | "timeout"
-        | "parse"
-        | "http"
-        | "not-html"
-        | "rate-limit";
-      message: string;
-    };
 
 const PreviewSchema = z.object({
   boardId: z.string().uuid(),
@@ -181,7 +166,6 @@ export async function previewListing(
   _prev: PreviewListingState,
   formData: FormData,
 ): Promise<PreviewListingState> {
-  "use server";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
@@ -198,19 +182,6 @@ export async function previewListing(
 // ---------------------------------------------------------------------------
 // commitListingImport
 // ---------------------------------------------------------------------------
-
-export type CommitListingState =
-  | { status: "idle" }
-  | {
-      status: "done";
-      succeeded: number;
-      failed: number;
-      /** Already-on-this-board images that we linked instead of re-downloading. */
-      deduped: number;
-      errors: string[];
-      boardId: string;
-    }
-  | { status: "error"; message: string };
 
 const CommitSchema = z.object({
   boardId: z.string().uuid(),
@@ -412,7 +383,6 @@ export async function commitListingImport(
   _prev: CommitListingState,
   formData: FormData,
 ): Promise<CommitListingState> {
-  "use server";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 

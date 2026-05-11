@@ -41,7 +41,7 @@
 		// previewListing action via process.env in the worker runtime.
 		"LISTING_SCRAPE_DAILY_LIMIT": "10",
 		"LISTING_REFRESH_COOLDOWN_HOURS": "12",
-		"SUPERADMIN_EMAILS": "brandonl.4231@gmail.com,siomaramlopez1994@gmail.com"
+		"SUPERADMIN_EMAILS": "brandonl.4231@gmail.com,siomaramlopez1994@gmail.com,lyonsj287@gmail.com"
 	}
 	// Secrets (do NOT commit): set with `wrangler secret put <NAME>`
 	//   SUPABASE_SERVICE_ROLE_KEY  — server-only Supabase admin key (sb_secret_...)
