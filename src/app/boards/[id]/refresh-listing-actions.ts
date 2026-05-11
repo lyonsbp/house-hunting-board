@@ -20,20 +20,11 @@ import {
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
+import type { RefreshResult } from "./refresh-listing-types";
+
 const RefreshSchema = z.object({
   propertyId: z.string().uuid(),
 });
-
-export type RefreshResult =
-  | {
-      ok: true;
-      listPriceChanged: boolean;
-      soldPriceChanged: boolean;
-      statusChanged: boolean;
-      previousStatus: string | null;
-      newStatus: string | null;
-    }
-  | { error: string };
 
 type SbClient = Awaited<ReturnType<typeof createClient>>;
 
