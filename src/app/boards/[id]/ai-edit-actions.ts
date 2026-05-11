@@ -10,6 +10,12 @@ import {
   startOfAiWindow,
 } from "@/lib/ai/quota";
 import { getEditor, DEFAULT_MODEL } from "@/lib/ai/registry";
+import {
+  buildRefMetadata,
+  resolveReferences,
+  validateRefInputs,
+  type RefInput,
+} from "@/lib/ai/references";
 import { getCurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -86,6 +92,19 @@ export async function editImageArtifact(
     };
   }
   const { boardId, artifactId, prompt } = parsed.data;
+
+  // References (optional). Hidden form input is a JSON-encoded array of
+  // RefInput per `lib/ai/references.ts`.
+  let refInputs: RefInput[];
+  try {
+    refInputs = validateRefInputs(formData.get("references"));
+  } catch (e) {
+    return {
+      status: "error",
+      code: "validation",
+      message: e instanceof Error ? e.message : "Invalid references.",
+    };
+  }
 
   const supabase = await createClient();
 
@@ -179,8 +198,32 @@ export async function editImageArtifact(
   const sourceBytes = new Uint8Array(await sourceBlob.arrayBuffer());
   const sourceMime = sourceBlob.type || "image/jpeg";
 
+  // Resolve reference images (RLS gates artifact reads + upload-prefix
+  // ownership). Done before the pending insert so quota isn't burned on
+  // a request that never reaches the model.
+  let referenceImages: Awaited<ReturnType<typeof resolveReferences>> = [];
+  const refMetadata = buildRefMetadata(refInputs);
+  if (refInputs.length > 0) {
+    try {
+      referenceImages = await resolveReferences(
+        supabase,
+        user.sub,
+        boardId,
+        refInputs,
+      );
+    } catch (e) {
+      return {
+        status: "error",
+        code: "validation",
+        message: e instanceof Error ? e.message : "Invalid references.",
+      };
+    }
+  }
+
   // Insert the pending ai_edits row first so the quota counter sees this
-  // invocation if a sibling tab also tries to fire one.
+  // invocation if a sibling tab also tries to fire one. Stamp `metadata.refs`
+  // up-front so collaborators subscribed to ai_edits realtime see the inputs
+  // even before the model finishes.
   const { data: editRow, error: editInsertError } = await supabase
     .from("ai_edits")
     .insert({
@@ -189,6 +232,7 @@ export async function editImageArtifact(
       model: DEFAULT_MODEL,
       variant_index: 0,
       status: "pending",
+      metadata: refMetadata.length > 0 ? { refs: refMetadata } : {},
     })
     .select("id")
     .single();
@@ -211,6 +255,7 @@ export async function editImageArtifact(
       source: { kind: "bytes", mimeType: sourceMime, bytes: sourceBytes },
       prompt,
       variants: 1,
+      references: referenceImages,
     });
     if (!result) throw new Error("Editor returned no result");
     if (result.image.bytes.length > MAX_OUTPUT_BYTES) {
@@ -256,6 +301,7 @@ export async function editImageArtifact(
         ai_edit_of: parent.id,
         prompt,
         model: DEFAULT_MODEL,
+        ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
       },
     })
     .select("id")
@@ -503,6 +549,17 @@ export async function remixImageArtifact(
   }
   const { boardId, artifactId, prompt, variants } = parsed.data;
 
+  let refInputs: RefInput[];
+  try {
+    refInputs = validateRefInputs(formData.get("references"));
+  } catch (e) {
+    return {
+      status: "error",
+      code: "validation",
+      message: e instanceof Error ? e.message : "Invalid references.",
+    };
+  }
+
   const supabase = await createClient();
 
   const { data: membership } = await supabase
@@ -588,14 +645,38 @@ export async function remixImageArtifact(
   const sourceBytes = new Uint8Array(await sourceBlob.arrayBuffer());
   const sourceMime = sourceBlob.type || "image/jpeg";
 
+  // Resolve reference images once for the whole batch.
+  let referenceImages: Awaited<ReturnType<typeof resolveReferences>> = [];
+  const refMetadata = buildRefMetadata(refInputs);
+  if (refInputs.length > 0) {
+    try {
+      referenceImages = await resolveReferences(
+        supabase,
+        user.sub,
+        boardId,
+        refInputs,
+      );
+    } catch (e) {
+      return {
+        status: "error",
+        code: "validation",
+        message: e instanceof Error ? e.message : "Invalid references.",
+      };
+    }
+  }
+  const refMetadataField = refMetadata.length > 0 ? { refs: refMetadata } : {};
+
   // Pre-insert N pending ai_edits rows so concurrent quota checks see the
-  // commitment immediately.
+  // commitment immediately. Stamp metadata.refs on each so a partner
+  // subscribed to ai_edits realtime sees the inputs even before the
+  // model finishes.
   const pendingRows = Array.from({ length: variants }, (_unused, i) => ({
     parent_artifact_id: parent.id,
     prompt,
     model: DEFAULT_MODEL,
     variant_index: i,
     status: "pending",
+    metadata: refMetadataField,
   }));
   const { data: editRows, error: editsError } = await supabase
     .from("ai_edits")
@@ -620,6 +701,7 @@ export async function remixImageArtifact(
       source: { kind: "bytes", mimeType: sourceMime, bytes: sourceBytes },
       prompt,
       variants,
+      references: referenceImages,
     });
   } catch (e) {
     const message = e instanceof Error ? e.message : "AI remix failed.";
@@ -701,6 +783,7 @@ export async function remixImageArtifact(
           model: DEFAULT_MODEL,
           variant_index: result.variantIndex,
           remix_size: variants,
+          ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
         },
       })
       .select("id")

@@ -1,0 +1,26 @@
+{
+	"$schema": "../../node_modules/wrangler/config-schema.json",
+	"main": "src/index.ts",
+	"name": "gc-ref-uploads",
+	"compatibility_date": "2026-04-26",
+	"compatibility_flags": [
+		"nodejs_compat",
+		"global_fetch_strictly_public"
+	],
+	// Daily 07:00 UTC sweep — late-night for both US coasts so the user
+	// experience never sees an upload-then-immediate-GC race.
+	"triggers": {
+		"crons": [
+			"0 7 * * *"
+		]
+	},
+	"vars": {
+		// Public Supabase URL — same project as the main Next.js worker.
+		"SUPABASE_URL": "https://vubqdsoczdzheuplfutd.supabase.co",
+		// Stale window: anything older than this is fair game. PRD §5.3a:
+		// "GC'd after 24h via a Cloudflare cron".
+		"REF_TTL_HOURS": "24"
+	}
+	// Secrets (do NOT commit): set with `wrangler secret put <NAME> --name gc-ref-uploads`
+	//   SUPABASE_SERVICE_ROLE_KEY  — server-only Supabase admin key (sb_secret_...)
+}

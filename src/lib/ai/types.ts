@@ -12,12 +12,35 @@ export type ImageSource =
   | { kind: "bytes"; mimeType: string; bytes: Uint8Array }
   | { kind: "url"; url: string };
 
+/**
+ * The role tag a user can attach to a reference image. Folded into the
+ * prompt as a structured hint by the editor (see `ROLE_HINT` in
+ * `lib/ai/references.ts`) rather than passed to the model as a separate
+ * knob, so adding a new backend doesn't need bespoke role plumbing.
+ */
+export type ReferenceRole =
+  | "style"
+  | "color"
+  | "materials"
+  | "scale"
+  | "placement"
+  | "other";
+
+export interface ReferenceImage {
+  source: ImageSource;
+  role?: ReferenceRole;
+  /** 1-based slot the user attached this in. Surfaced in the prompt hint. */
+  index: number;
+}
+
 export interface ImageEditRequest {
   source: ImageSource;
   prompt: string;
   /** 1 for an Edit; N for a Remix fan-out. */
   variants: number;
   seed?: number;
+  /** Up to 3; ordered by slot index. Empty/undefined when the user attached none. */
+  references?: ReferenceImage[];
 }
 
 export interface ImageEditResult {

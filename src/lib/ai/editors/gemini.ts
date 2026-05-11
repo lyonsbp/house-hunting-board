@@ -1,8 +1,10 @@
+import { formatRefHint } from "../role-hints";
 import type {
   ImageEditModel,
   ImageEditRequest,
   ImageEditResult,
   ImageEditor,
+  ReferenceImage,
 } from "../types";
 
 /**
@@ -44,6 +46,11 @@ export class GeminiImageEditor implements ImageEditor {
     const sourceMime = await loadSourceMime(req.source);
     const sourceB64 = bytesToBase64(sourceBytes);
 
+    // Pre-encode reference images once (each variant request reuses them).
+    // Gemini accepts multiple `inline_data` parts in a single `contents`
+    // entry — we put role-hint text first, then the source, then refs.
+    const refs = await Promise.all((req.references ?? []).map(encodeRef));
+
     // Fan out: Gemini's image-gen endpoint returns one image per call, so
     // for variants > 1 we issue N parallel calls. Promise.allSettled so a
     // single safety-filter rejection or timeout doesn't kill the others.
@@ -55,6 +62,7 @@ export class GeminiImageEditor implements ImageEditor {
           sourceB64,
           sourceMime,
           prompt: req.prompt,
+          refs,
           variantIndex: i,
         }),
       ),
@@ -85,29 +93,66 @@ export class GeminiImageEditor implements ImageEditor {
   }
 }
 
+type EncodedRef = {
+  index: number;
+  role?: ReferenceImage["role"];
+  mime: string;
+  b64: string;
+};
+
+async function encodeRef(ref: ReferenceImage): Promise<EncodedRef> {
+  if (ref.source.kind === "bytes") {
+    return {
+      index: ref.index,
+      role: ref.role,
+      mime: ref.source.mimeType,
+      b64: bytesToBase64(ref.source.bytes),
+    };
+  }
+  // URL — fetch once and base64. Server-side resolver normally hands us
+  // bytes, so this branch is exercised only by callers that pass URL refs
+  // directly (tests, future REST surface).
+  const res = await fetch(ref.source.url);
+  if (!res.ok) {
+    throw new Error(`Failed to fetch reference ${ref.index}: ${res.status}`);
+  }
+  const buf = new Uint8Array(await res.arrayBuffer());
+  return {
+    index: ref.index,
+    role: ref.role,
+    mime: res.headers.get("content-type") ?? "image/jpeg",
+    b64: bytesToBase64(buf),
+  };
+}
+
 async function runOne(args: {
   apiKey: string;
   modelName: string;
   sourceB64: string;
   sourceMime: string;
   prompt: string;
+  refs: EncodedRef[];
   variantIndex: number;
 }): Promise<ImageEditResult> {
+  const refHints = args.refs
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .map((r) => formatRefHint(r.index, r.role))
+    .join("\n");
+  const fullPrompt = refHints ? `${args.prompt}\n\n${refHints}` : args.prompt;
+
+  const parts: Array<
+    { text: string } | { inline_data: { mime_type: string; data: string } }
+  > = [
+    { text: fullPrompt },
+    { inline_data: { mime_type: args.sourceMime, data: args.sourceB64 } },
+  ];
+  for (const ref of args.refs) {
+    parts.push({ inline_data: { mime_type: ref.mime, data: ref.b64 } });
+  }
+
   const body = {
-    contents: [
-      {
-        role: "user",
-        parts: [
-          { text: args.prompt },
-          {
-            inline_data: {
-              mime_type: args.sourceMime,
-              data: args.sourceB64,
-            },
-          },
-        ],
-      },
-    ],
+    contents: [{ role: "user", parts }],
     generationConfig: {
       responseModalities: ["IMAGE"],
     },

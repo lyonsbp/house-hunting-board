@@ -2,6 +2,14 @@
 
 import { useActionState, useEffect, useRef, useState } from "react";
 import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  useSensor,
+  useSensors,
+  type DragEndEvent,
+} from "@dnd-kit/core";
+import {
   Dropdown,
   DropdownItem,
   DropdownMenu,
@@ -10,6 +18,8 @@ import {
 } from "@heroui/react";
 
 import type { Artifact } from "@/lib/artifacts";
+import { resizeRefImage } from "@/lib/ai/ref-image-resize";
+import type { ReferenceRole } from "@/lib/ai/types";
 
 import {
   addComment,
@@ -34,6 +44,12 @@ import {
   type RemixImageState,
   type RemixVariant,
 } from "./ai-edit-actions";
+import { uploadRefImage, type BoardRefArtifact } from "./ai-ref-actions";
+import { AiRefRow } from "./ai-ref-row";
+import { EMPTY_SLOTS, type Slot } from "./ai-ref-types";
+import { BoardRefPicker } from "./board-ref-picker";
+import { OtherDraftsBanner, useAiPresence, type Draft } from "./ai-presence";
+import { createClient as createBrowserSupabase } from "@/lib/supabase/client";
 
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
@@ -1041,6 +1057,33 @@ function AiEditPanel({
   const [variants, setVariants] = useState(1);
   const [reviewDismissed, setReviewDismissed] = useState(false);
   const [discarding, setDiscarding] = useState(false);
+  const [slots, setSlots] = useState<readonly [Slot, Slot, Slot]>(EMPTY_SLOTS);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [refError, setRefError] = useState<string | null>(null);
+  const [promptText, setPromptText] = useState("");
+  const [meDisplay, setMeDisplay] = useState<string>("Someone");
+  const [meId, setMeId] = useState<string>("");
+  const { peers, broadcastDraft } = useAiPresence(boardId, true);
+
+  useEffect(() => {
+    let cancelled = false;
+    const supabase = createBrowserSupabase();
+    void supabase.auth.getUser().then(({ data }) => {
+      if (cancelled) return;
+      const u = data.user;
+      if (!u) return;
+      setMeId(u.id);
+      setMeDisplay(
+        (u.user_metadata?.full_name as string | undefined) ??
+          (u.user_metadata?.name as string | undefined) ??
+          u.email ??
+          "Someone",
+      );
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const [editState, editAction, editPending] = useActionState(
     editImageArtifact,
     editImageInitial,
@@ -1049,6 +1092,29 @@ function AiEditPanel({
     remixImageArtifact,
     remixImageInitial,
   );
+
+  // Local sensors for the picker→slot drag. Activation distance is small
+  // because the picker tiles are small targets; we want a click without
+  // movement to fire onClick (which fills the next empty slot).
+  const dndSensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 4 } }),
+    useSensor(TouchSensor, {
+      activationConstraint: { delay: 200, tolerance: 6 },
+    }),
+  );
+
+  // Revoke object URLs when slots change to avoid leaking blobs across edits.
+  useEffect(() => {
+    return () => {
+      for (const s of slots) {
+        if (s.kind === "filled" && s.previewUrl.startsWith("blob:")) {
+          URL.revokeObjectURL(s.previewUrl);
+        }
+      }
+    };
+    // We intentionally only run on unmount; per-slot cleanup happens in handlers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -1143,12 +1209,162 @@ function AiEditPanel({
         ? editState.prompt
         : undefined;
 
+  // After a generation, seed the textarea with the prompt so the user can
+  // tweak and re-fire without retyping. The lint rule against synchronous
+  // setState in effects is disabled here: this is a one-shot init when an
+  // external (server-action result) value first becomes available, not a
+  // derivation cycle.
+  useEffect(() => {
+    if (lastPrompt && !promptText) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      setPromptText(lastPrompt);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lastPrompt]);
+
+  function setSlot(idx: 0 | 1 | 2, next: Slot) {
+    setSlots((prev) => {
+      const old = prev[idx];
+      if (old.kind === "filled" && old.previewUrl.startsWith("blob:")) {
+        URL.revokeObjectURL(old.previewUrl);
+      }
+      const out = [prev[0], prev[1], prev[2]] as [Slot, Slot, Slot];
+      out[idx] = next;
+      return out;
+    });
+  }
+
+  function nextEmptyIdx(): 0 | 1 | 2 | null {
+    for (let i = 0; i < 3; i++) {
+      if (slots[i].kind === "empty") return i as 0 | 1 | 2;
+    }
+    return null;
+  }
+
+  async function handlePickFile(idx: 0 | 1 | 2, file: File) {
+    setRefError(null);
+    setSlot(idx, { kind: "uploading" });
+    try {
+      const resized = await resizeRefImage(file);
+      const fd = new FormData();
+      fd.set("file", resized);
+      const res = await uploadRefImage(fd);
+      if ("error" in res) {
+        setRefError(res.error);
+        setSlot(idx, { kind: "empty" });
+        return;
+      }
+      const previewUrl = URL.createObjectURL(resized);
+      // Sign a separate URL collaborators can render in the presence
+      // banner (blob URLs are document-scoped and useless to peers).
+      const supabase = createBrowserSupabase();
+      const { data: signed } = await supabase.storage
+        .from("artifacts")
+        .createSignedUrl(res.path, 600);
+      const broadcastUrl = signed?.signedUrl ?? "";
+      setSlot(idx, {
+        kind: "filled",
+        ref: { source: "upload", path: res.path, index: idx + 1 },
+        previewUrl,
+        broadcastUrl,
+      });
+    } catch (e) {
+      setRefError(
+        e instanceof Error ? e.message : "Couldn't process that image.",
+      );
+      setSlot(idx, { kind: "empty" });
+    }
+  }
+
+  function handleAttachBoardArtifact(
+    idx: 0 | 1 | 2,
+    artifact: BoardRefArtifact,
+  ) {
+    setRefError(null);
+    setSlot(idx, {
+      kind: "filled",
+      ref: { source: "artifact", artifactId: artifact.id, index: idx + 1 },
+      previewUrl: artifact.signedUrl,
+      broadcastUrl: artifact.signedUrl,
+    });
+  }
+
+  function handleSetRole(idx: 0 | 1 | 2, role: ReferenceRole | undefined) {
+    const cur = slots[idx];
+    if (cur.kind !== "filled") return;
+    setSlots((prev) => {
+      const out = [prev[0], prev[1], prev[2]] as [Slot, Slot, Slot];
+      out[idx] = { ...cur, ref: { ...cur.ref, role } };
+      return out;
+    });
+  }
+
+  function handleClear(idx: 0 | 1 | 2) {
+    setSlot(idx, { kind: "empty" });
+  }
+
+  function handleDragEnd(e: DragEndEvent) {
+    const overData = e.over?.data.current;
+    const activeData = e.active.data.current;
+    if (
+      overData?.kind === "ref-slot" &&
+      activeData?.kind === "board-ref" &&
+      typeof overData.idx === "number"
+    ) {
+      handleAttachBoardArtifact(
+        overData.idx as 0 | 1 | 2,
+        activeData.artifact as BoardRefArtifact,
+      );
+    }
+  }
+
+  function handlePickerClick(artifact: BoardRefArtifact) {
+    const idx = nextEmptyIdx();
+    if (idx === null) {
+      setRefError("All 3 reference slots are full. Clear one first.");
+      return;
+    }
+    handleAttachBoardArtifact(idx, artifact);
+  }
+
+  // Serialize filled slots into the hidden input the action reads.
+  const referencesJson = JSON.stringify(
+    slots
+      .filter((s): s is Extract<Slot, { kind: "filled" }> => s.kind === "filled")
+      .map((s) => s.ref),
+  );
+
+  // Broadcast the in-progress draft so other board members see what's
+  // being attempted before it runs (PRD §5.3a "Realtime").
+  useEffect(() => {
+    if (!meId) return;
+    const draft: Draft = {
+      user_id: meId,
+      display: meDisplay,
+      artifactId,
+      prompt: promptText,
+      variants,
+      refs: slots
+        .filter((s): s is Extract<Slot, { kind: "filled" }> => s.kind === "filled")
+        .map((s) => ({
+          index: s.ref.index,
+          role: s.ref.role,
+          thumbUrl: s.broadcastUrl,
+        })),
+    };
+    broadcastDraft(draft);
+    // broadcastDraft is stable (defined in hook); deps cover all draft inputs.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [meId, meDisplay, artifactId, promptText, variants, slots]);
+
   return (
     <>
+      <DndContext sensors={dndSensors} onDragEnd={handleDragEnd}>
       <form action={action} className="flex flex-col gap-3">
         <input type="hidden" name="boardId" value={boardId} />
         <input type="hidden" name="artifactId" value={artifactId} />
         <input type="hidden" name="variants" value={variants} />
+        <input type="hidden" name="references" value={referencesJson} />
 
         <p className="text-[11px] uppercase tracking-wide text-stone-500">
           {remainingDisplay} of {quota?.limit ?? "10"}{" "}
@@ -1166,8 +1382,30 @@ function AiEditPanel({
               : "e.g. Add a small pool with a tanning ledge to the backyard"
           }
           disabled={pending || atLimit}
-          defaultValue={lastPrompt}
+          value={promptText}
+          onChange={(e) => setPromptText(e.target.value)}
           className="w-full rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-900 placeholder:text-stone-400 focus:border-stone-400 focus:outline-none focus:ring-2 focus:ring-stone-200 disabled:bg-stone-50"
+        />
+
+        <OtherDraftsBanner peers={peers} />
+
+        <AiRefRow
+          slots={slots}
+          disabled={pending || atLimit}
+          onPickFile={handlePickFile}
+          onSetRole={handleSetRole}
+          onClear={handleClear}
+          onPickFromBoard={() => setPickerOpen((v) => !v)}
+        />
+
+        {refError && <p className="text-xs text-red-700">{refError}</p>}
+
+        <BoardRefPicker
+          boardId={boardId}
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          onPick={handlePickerClick}
+          excludeArtifactId={artifactId}
         />
 
         <div className="flex flex-wrap items-center gap-2">
@@ -1238,6 +1476,7 @@ function AiEditPanel({
           </button>
         </div>
       </form>
+      </DndContext>
 
       {showingEditReview && editState.status === "done" && editState.signedUrl && (
         <ImageZoomDialog

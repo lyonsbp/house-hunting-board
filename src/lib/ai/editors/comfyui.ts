@@ -25,6 +25,9 @@ export class ComfyUIEditor implements ImageEditor {
   }
 
   async edit(_req: ImageEditRequest): Promise<ImageEditResult[]> {
+    // TODO(M8): when this backend lands, wire `_req.references` as
+    // additional image inputs into the Kontext / Qwen-Image-Edit nodes
+    // and prepend role hints from `lib/ai/role-hints.ts` to the prompt.
     throw new Error(`ComfyUIEditor (${this.model}) not implemented (M3)`);
   }
 }

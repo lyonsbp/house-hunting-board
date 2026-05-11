@@ -187,37 +187,78 @@ counts as 1; a Remix of N variants counts as N). Counter derived from
 remaining quota for the week and disables submit at zero. No dollar-based
 billing yet — invocation count is a simpler proxy and easier to explain.
 
-### 5.3a Reference images for AI generation (M8)
+### 5.3a Style references for AI edits & remix (M8)
 
-Extends Edit and Remix so the user can attach **reference images**
-alongside the written prompt — examples of style, color palette,
-materials, fixture size, or location aesthetic the model should mimic.
-The references condition the output but are not themselves edited; only
-the original source image is the subject. Typical flow: user picks a
-backyard photo as the source, types *"add a small pool with a tanning
-ledge"*, and drags in two pool photos they pinned earlier as style
-references → Remix returns three variations that match the source's
-geometry but borrow tile color and ledge shape from the references.
+Extend the AI editor (Edit + Remix) so users can attach reference images
+alongside the written prompt to convey style, color, materials, scale,
+or placement that's hard to put in words. The motivating case: remixing
+a backyard photo with *"add a small pool with a tanning ledge"* goes
+from a generic-pool guess to a faithful match when the user attaches
+two or three pool photos showing the desired stone color, ledge width,
+and surround. The same applies to the multi-variant Remix flow —
+references constrain the variation axis (*"vary the cabinet color, but
+match the island shape and counter material from these refs"*) so the
+N outputs feel like riffs on a coherent target rather than unrelated
+guesses.
 
-References can come from two places: (1) **existing artifacts on the
-board** (picker shows recent images, filterable by category/tag — reuses
-the same image-picker component as the listing import), or (2) **fresh
-uploads** that go straight to Supabase Storage as ordinary `image`
-artifacts in an "AI references" auto-category, so they're durable and
-reusable across future generations.
+**UI placement.** Inside the AI edit modal, a row of **three empty
+thumbnail slots** sits directly below the prompt textarea and above the
+Variants selector + Generate button. Each slot is an outlined square
+that accepts click-to-upload or drag-and-drop; populated slots show the
+thumbnail with an `×` to clear and a small role-pill dropdown beneath.
+All three slots are optional — the user can attach 0, 1, 2, or 3 refs.
+A *"From board"* link next to the row opens a side picker scoped to the
+current board's artifacts (drag a thumb out of the picker into a slot).
 
-**Model fit**: Gemini 2.5 Flash Image natively accepts multi-image input
-and is the primary path. FLUX Kontext supports a single edit subject;
-for the FLUX fallback we collapse references into the prompt as a
-text-described style summary (cheap LLM pass) rather than passing the
-images. The `ImageEditor` interface gains a `references: ArtifactRef[]`
-field; each backend decides how to use them.
+**Reference sources.**
 
-**Schema**: a new `ai_edit_references` join table — `(ai_edit_id,
-artifact_id, role)` where `role` is `source` | `reference` — so the
-lineage on `ai_edits` captures every input, not just the parent. Cost
-guardrail unchanged: each invocation still counts as 1 (Edit) or N
-(Remix) regardless of reference count.
+- **Upload from disk** — ephemeral; not added to the board.
+- **Pick from existing board artifacts** via the side panel —
+  drag-from-board, so inspiration already saved on the board becomes
+  prompting fuel directly. This is the bigger unlock: the board is the
+  user's mood board, and the editor should treat it as a first-class
+  palette.
+
+**Reference roles.** Each ref is optionally tagged with one of *style /
+color / materials / scale / placement / other*. The role is folded into
+the prompt as a structured hint (e.g. *"Reference 2 (color): match the
+warm cream tones of this kitchen."*) rather than a separate model knob,
+so swappable backends don't need bespoke role plumbing.
+
+**Limits.** Up to **3 references per invocation** (matches the three UI
+slots). Caps protect token cost on Gemini and request-size limits on
+FLUX Kontext multi-image. Reference images are resized to ≤1024px on
+the long edge client-side before upload to the model.
+
+**Storage.** Ephemeral uploads land in a temporary `ref_uploads/`
+storage prefix and are GC'd after 24h via a Cloudflare cron.
+Board-picked refs reuse their existing artifact path with a short-lived
+signed URL. The `ai_edits` row records reference inputs in a `metadata`
+jsonb column as `metadata.refs: [{source: 'artifact'|'upload',
+id_or_path, role}]` for provenance and reproducibility — so a
+generation can be re-run later with the same inputs even if an
+ephemeral upload has aged out (we surface a *"reference no longer
+available"* pill in that case). New migration adds the
+`ai_edits.metadata` column.
+
+**Backend.** Gemini 2.5 Flash Image natively accepts multi-image input
+— primary path, since it's already the M3 default and the model table
+calls out multi-image input as a strength. FLUX Kontext supports
+multi-image conditioning via its Max / multi-image endpoints; the
+local ComfyUI backend wires references as additional image inputs to
+the Kontext / Qwen-Image-Edit nodes. The `ImageEditor` interface gains
+a `references: ReferenceImage[]` parameter so the three backends stay
+swappable per-request.
+
+**Quota.** A Remix with N variants and K references still counts as N
+invocations against the 10/week cap — references are inputs, not
+outputs, and shouldn't be doubly penalized.
+
+**Realtime.** While a partner is composing an edit with refs, the
+in-progress draft (prompt + ref thumbnails) broadcasts on the board
+channel as a presence event so collaborators see what's being attempted
+before it runs — and can nudge via comment or drag a different ref into
+the picker before submit.
 
 ### 5.4 Price Analytics (post-MVP, schema-prepared at MVP)
 
@@ -292,4 +333,4 @@ Cloudflare Workers (cron + queue consumers)
 | **M5** | Price analytics UI (cohort table + per-metro filter + chip drilldown) |
 | **M6** | Drill-down dashboard: category-tile dashboard + nested slug route + swim-lane drop panel + fan-out hover + click-after-drag guard |
 | **M7** | Canvas mode: per-category freeform pin board + lazy seed-from-grid + reset + resizable viewport (migration `0013`) |
-| **M8** | Reference images for AI generation: multi-image prompt conditioning for Edit/Remix + `ai_edit_references` join table + board-artifact picker / fresh-upload paths |
+| **M8** | Style references for AI edits & remix: 3-slot ref row in editor + role pills + board-artifact picker + ephemeral-upload GC + `ai_edits.metadata` jsonb |

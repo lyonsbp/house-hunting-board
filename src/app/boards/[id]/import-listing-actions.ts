@@ -1,3 +1,5 @@
+"use server";
+
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -181,7 +183,6 @@ export async function previewListing(
   _prev: PreviewListingState,
   formData: FormData,
 ): Promise<PreviewListingState> {
-  "use server";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
@@ -412,7 +413,6 @@ export async function commitListingImport(
   _prev: CommitListingState,
   formData: FormData,
 ): Promise<CommitListingState> {
-  "use server";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
