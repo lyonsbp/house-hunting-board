@@ -16,11 +16,9 @@ import { PasteImageListener } from "../../paste-image-listener";
 import { ReadOnlyBanner } from "../../read-only-banner";
 import { RealtimeBridge } from "../../realtime-bridge";
 import { CanvasView } from "./canvas-view";
+import { CategorySwitcher } from "./category-switcher";
 import { CategoryView } from "./category-view";
 import { ModeToggle, type ViewMode } from "./mode-toggle";
-
-const SERIF =
-  '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
 
 export default async function CategoryDrillDownPage({
   params,
@@ -111,14 +109,13 @@ export default async function CategoryDrillDownPage({
           ← {core.board.name}
         </Link>
         <div className="flex items-center justify-between gap-4">
-          <h1
-            style={{ fontFamily: SERIF }}
-            className={`text-3xl font-normal leading-tight sm:text-4xl ${
-              isUncategorized ? "italic text-stone-700" : "text-stone-900"
-            }`}
-          >
-            {displayName}
-          </h1>
+          <CategorySwitcher
+            boardId={id}
+            currentCategoryId={resolvedCategoryId}
+            currentDisplayName={displayName}
+            tiles={dashboardSummary.tiles}
+            mode={mode === "canvas" ? "canvas" : undefined}
+          />
           {!isUncategorized && <ModeToggle mode={mode} />}
         </div>
       </header>

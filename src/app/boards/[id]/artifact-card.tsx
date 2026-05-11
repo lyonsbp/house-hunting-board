@@ -1153,6 +1153,12 @@ function AiEditPanel({
 }) {
   const [quota, setQuota] = useState<AiQuotaStatus | null>(null);
   const [variants, setVariants] = useState(1);
+  // M3 model selection. Gemini is the default for speed/cost; FLUX
+  // Kontext trades both for stronger structural fidelity (preserves the
+  // source layout when changing materials, color, etc.).
+  const [model, setModel] = useState<"gemini-2.5-flash-image" | "flux-kontext">(
+    "gemini-2.5-flash-image",
+  );
   const [reviewDismissed, setReviewDismissed] = useState(false);
   const [discarding, setDiscarding] = useState(false);
   const [slots, setSlots] = useState<readonly [Slot, Slot, Slot]>(EMPTY_SLOTS);
@@ -1463,6 +1469,7 @@ function AiEditPanel({
         <input type="hidden" name="artifactId" value={artifactId} />
         <input type="hidden" name="variants" value={variants} />
         <input type="hidden" name="references" value={referencesJson} />
+        <input type="hidden" name="model" value={model} />
 
         <p className="text-[11px] uppercase tracking-wide text-stone-500">
           {remainingDisplay} of {quota?.limit ?? "10"}{" "}
@@ -1544,6 +1551,40 @@ function AiEditPanel({
             {variants === 1
               ? "single edit"
               : `remix — ${variants} variants, uses ${variants} of your quota`}
+          </span>
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] uppercase tracking-wider text-stone-500">
+            Model
+          </span>
+          <div className="inline-flex gap-1 rounded-full border border-stone-200 bg-white p-0.5">
+            {(
+              [
+                { value: "gemini-2.5-flash-image", label: "Gemini" },
+                { value: "flux-kontext", label: "FLUX Kontext" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => setModel(opt.value)}
+                aria-pressed={model === opt.value}
+                disabled={pending}
+                className={`rounded-full px-2.5 py-1 text-xs transition-colors ${
+                  model === opt.value
+                    ? "bg-stone-900 text-stone-50"
+                    : "text-stone-500 hover:text-stone-900 disabled:opacity-30"
+                }`}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+          <span className="text-[11px] text-stone-500">
+            {model === "gemini-2.5-flash-image"
+              ? "fast, cheap"
+              : "slower; better at preserving the source"}
           </span>
         </div>
 

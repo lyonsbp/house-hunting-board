@@ -16,6 +16,24 @@ import {
   validateRefInputs,
   type RefInput,
 } from "@/lib/ai/references";
+import type { ImageEditModel } from "@/lib/ai/types";
+
+/**
+ * Models the user can pick from the AI-edit modal. Has to be a strict
+ * subset of `ImageEditModel` (the registry's full enum) — kept small so
+ * the UI stays simple and we don't expose the still-stubbed local
+ * ComfyUI variants in production.
+ */
+const SELECTABLE_MODELS = [
+  "gemini-2.5-flash-image",
+  "flux-kontext",
+] as const satisfies readonly ImageEditModel[];
+
+function pickModel(raw: FormDataEntryValue | null): ImageEditModel {
+  if (typeof raw !== "string") return DEFAULT_MODEL;
+  const found = (SELECTABLE_MODELS as readonly string[]).includes(raw);
+  return found ? (raw as ImageEditModel) : DEFAULT_MODEL;
+}
 import { getCurrentUser } from "@/lib/auth";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -92,6 +110,7 @@ export async function editImageArtifact(
     };
   }
   const { boardId, artifactId, prompt } = parsed.data;
+  const model = pickModel(formData.get("model"));
 
   // References (optional). Hidden form input is a JSON-encoded array of
   // RefInput per `lib/ai/references.ts`.
@@ -229,7 +248,7 @@ export async function editImageArtifact(
     .insert({
       parent_artifact_id: parent.id,
       prompt,
-      model: DEFAULT_MODEL,
+      model,
       variant_index: 0,
       status: "pending",
       metadata: refMetadata.length > 0 ? { refs: refMetadata } : {},
@@ -250,7 +269,7 @@ export async function editImageArtifact(
   let outputMime: string;
   let costCents: number | null;
   try {
-    const editor = getEditor(DEFAULT_MODEL);
+    const editor = getEditor(model);
     const [result] = await editor.edit({
       source: { kind: "bytes", mimeType: sourceMime, bytes: sourceBytes },
       prompt,
@@ -300,7 +319,7 @@ export async function editImageArtifact(
       metadata: {
         ai_edit_of: parent.id,
         prompt,
-        model: DEFAULT_MODEL,
+        model,
         ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
       },
     })
@@ -548,6 +567,7 @@ export async function remixImageArtifact(
     };
   }
   const { boardId, artifactId, prompt, variants } = parsed.data;
+  const model = pickModel(formData.get("model"));
 
   let refInputs: RefInput[];
   try {
@@ -673,7 +693,7 @@ export async function remixImageArtifact(
   const pendingRows = Array.from({ length: variants }, (_unused, i) => ({
     parent_artifact_id: parent.id,
     prompt,
-    model: DEFAULT_MODEL,
+    model,
     variant_index: i,
     status: "pending",
     metadata: refMetadataField,
@@ -693,7 +713,7 @@ export async function remixImageArtifact(
   for (const row of editRows) editIdByVariant.set(row.variant_index, row.id);
 
   // Run the model.
-  const editor = getEditor(DEFAULT_MODEL);
+  const editor = getEditor(model);
   type ModelResults = Awaited<ReturnType<typeof editor.edit>>;
   let modelResults: ModelResults = [];
   try {
@@ -780,7 +800,7 @@ export async function remixImageArtifact(
         metadata: {
           ai_edit_of: parent.id,
           prompt,
-          model: DEFAULT_MODEL,
+          model,
           variant_index: result.variantIndex,
           remix_size: variants,
           ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
@@ -833,11 +853,23 @@ export async function remixImageArtifact(
   }
 
   if (variantOutputs.length === 0) {
+    // Surface the actual per-variant error rows so we can debug instead
+    // of just showing "try a different prompt". The most common path now
+    // is FLUX_API_KEY missing or BFL endpoint mismatches.
+    const ids = [...editIdByVariant.values()];
+    const { data: failedRows } = await supabase
+      .from("ai_edits")
+      .select("error")
+      .in("id", ids)
+      .eq("status", "failed")
+      .limit(1);
+    const detail = failedRows?.[0]?.error;
     return {
       status: "error",
       code: "model",
-      message:
-        "All variants failed — try a different prompt or fewer variants.",
+      message: detail
+        ? `All variants failed — first error: ${detail}`
+        : "All variants failed — try a different prompt or fewer variants.",
     };
   }
 
