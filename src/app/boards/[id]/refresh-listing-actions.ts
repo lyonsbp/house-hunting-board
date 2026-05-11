@@ -1,3 +1,5 @@
+"use server";
+
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
@@ -227,7 +229,6 @@ export async function refreshListingCore(input: {
 export async function refreshListing(input: {
   propertyId: string;
 }): Promise<RefreshResult> {
-  "use server";
   const user = await getCurrentUser();
   if (!user) redirect("/login");
 
