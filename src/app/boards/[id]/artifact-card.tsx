@@ -20,6 +20,7 @@ import {
 import type { Artifact } from "@/lib/artifacts";
 import { resizeRefImage } from "@/lib/ai/ref-image-resize";
 import type { ReferenceRole } from "@/lib/ai/types";
+import { UNCATEGORIZED_ID } from "@/lib/board-data-shared";
 
 import {
   addComment,
@@ -29,6 +30,7 @@ import {
   deleteComment,
   listComments,
   removeTagFromArtifact,
+  setFavorite,
   unassignCategory,
   type AddCommentState,
   type CommentRow,
@@ -76,6 +78,8 @@ export function ArtifactCard({
   allTags,
   provenance,
   canEdit,
+  currentCategoryId,
+  isFavorite = false,
 }: {
   artifact: Artifact;
   boardId: string;
@@ -86,9 +90,34 @@ export function ArtifactCard({
   allTags: Tag[];
   provenance?: Provenance;
   canEdit: boolean;
+  /**
+   * The category the user is currently viewing, when this card is rendered
+   * inside a real-category drill-down. Omitted (or set to the Uncategorized
+   * sentinel) elsewhere — disables the favorite toggle in those contexts.
+   */
+  currentCategoryId?: string;
+  /** Favorite state within `currentCategoryId`. Ignored if no category. */
+  isFavorite?: boolean;
 }) {
   const [openPanel, setOpenPanel] = useState<PanelKind>(null);
   const formRef = useRef<HTMLFormElement>(null);
+
+  const canFavorite =
+    canEdit &&
+    !!currentCategoryId &&
+    currentCategoryId !== UNCATEGORIZED_ID;
+
+  function handleToggleFavorite() {
+    if (!canFavorite || !currentCategoryId) return;
+    // Fire-and-forget; the RealtimeBridge picks up the artifact_categories
+    // UPDATE and triggers a router.refresh so the new state lands.
+    void setFavorite({
+      boardId,
+      categoryId: currentCategoryId,
+      artifactId: artifact.id,
+      favorite: !isFavorite,
+    });
+  }
 
   return (
     <div className="group relative">
@@ -110,6 +139,18 @@ export function ArtifactCard({
           kind={artifact.kind}
           onOpenPanel={setOpenPanel}
           onRemove={() => formRef.current?.requestSubmit()}
+          onToggleFavorite={canFavorite ? handleToggleFavorite : undefined}
+          isFavorite={isFavorite}
+        />
+      )}
+
+      {isFavorite && (
+        <FavoriteBadge
+          // AiBadge sits at left-2 top-2 inside the image container — offset
+          // the star so they don't overlap on AI-edited image favorites.
+          offsetForAiBadge={
+            artifact.kind === "image" && !!artifact.aiEditOf
+          }
         />
       )}
 
@@ -141,10 +182,15 @@ function CardOverflowMenu({
   kind,
   onOpenPanel,
   onRemove,
+  onToggleFavorite,
+  isFavorite,
 }: {
   kind: Artifact["kind"];
   onOpenPanel: (panel: PanelKind) => void;
   onRemove: () => void;
+  /** Provided only when the card is rendered in a real-category context. */
+  onToggleFavorite?: () => void;
+  isFavorite: boolean;
 }) {
   return (
     <Dropdown>
@@ -177,6 +223,11 @@ function CardOverflowMenu({
           <DropdownItem onAction={() => onOpenPanel("comments")}>
             Comments
           </DropdownItem>
+          {onToggleFavorite && (
+            <DropdownItem onAction={onToggleFavorite}>
+              {isFavorite ? "Remove from favorites" : "Add to favorites"}
+            </DropdownItem>
+          )}
           {kind === "image" && (
             <DropdownItem onAction={() => onOpenPanel("ai-edit")}>
               AI edit…
@@ -188,6 +239,44 @@ function CardOverflowMenu({
         </DropdownMenu>
       </DropdownPopover>
     </Dropdown>
+  );
+}
+
+/**
+ * Star badge for favorited cards. Top-left, mirrors the AiBadge geometry.
+ * When both an AI badge and a favorite badge are present on the same
+ * card, the AI badge stays anchored at left-2 and the star sits to its
+ * right at left-12 (see `AiBadge` and the `ImageBody` renderer).
+ */
+function FavoriteBadge({
+  offsetForAiBadge = false,
+}: {
+  offsetForAiBadge?: boolean;
+}) {
+  return (
+    <span
+      title="Favorite"
+      aria-label="Favorite"
+      className={`pointer-events-none absolute top-2 z-10 inline-flex items-center gap-1 rounded-full bg-amber-500/95 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider text-white shadow-sm backdrop-blur-sm ${
+        offsetForAiBadge ? "left-14" : "left-2"
+      }`}
+      style={{ letterSpacing: "0.12em" }}
+    >
+      <StarIcon />
+    </span>
+  );
+}
+
+function StarIcon({ className = "h-3 w-3" }: { className?: string }) {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="currentColor"
+      aria-hidden="true"
+      className={className}
+    >
+      <path d="M12 2.5l2.9 6.2 6.6.9-4.8 4.5 1.2 6.4L12 17.6 6.1 20.5l1.2-6.4-4.8-4.5 6.6-.9z" />
+    </svg>
   );
 }
 
@@ -540,12 +629,21 @@ function CardPanelDialog({
       }}
       // The dialog is a descendant of a dnd-kit SortableCardWrapper. Native
       // <dialog showModal()> moves rendering to the top layer but pointer
-      // events still bubble through React's tree, so without stopping them
-      // dnd-kit interprets clicks inside the modal as drag-starts on the
-      // card behind it. Eat pointer events at the dialog boundary.
+      // and mouse events still bubble through React's tree by JSX position,
+      // so without stopping them dnd-kit interprets clicks/drags inside the
+      // modal as drag-starts on the card behind it (this also broke text
+      // selection — drag-to-select on modal copy would yank the card below).
+      // dnd-kit's MouseSensor listens on `mousedown`, distinct from
+      // `pointerdown`, so we have to eat both at the dialog boundary.
       onPointerDown={(e) => e.stopPropagation()}
       onPointerMove={(e) => e.stopPropagation()}
       onPointerUp={(e) => e.stopPropagation()}
+      onMouseDown={(e) => e.stopPropagation()}
+      onMouseMove={(e) => e.stopPropagation()}
+      onMouseUp={(e) => e.stopPropagation()}
+      onTouchStart={(e) => e.stopPropagation()}
+      onTouchMove={(e) => e.stopPropagation()}
+      onTouchEnd={(e) => e.stopPropagation()}
       className="m-0 mx-auto my-auto max-h-[90dvh] rounded-2xl border border-stone-200 bg-white p-0 shadow-2xl backdrop:bg-stone-900/30 backdrop:backdrop-blur-sm"
     >
       <div className="w-[min(420px,95vw)] max-h-[85dvh] overflow-y-auto p-5 sm:p-6">

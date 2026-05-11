@@ -44,7 +44,11 @@ const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
 
 type Tag = { id: string; name: string };
-type Membership = { categoryId: string; sortOrder: number };
+type Membership = {
+  categoryId: string;
+  sortOrder: number;
+  isFavorite: boolean;
+};
 type Category = { id: string; name: string };
 type ArtifactProvenance = {
   address: string | null;
@@ -279,24 +283,32 @@ export function CategoryView({
 
       <SortableContext items={sortableIds} strategy={rectSortingStrategy}>
         <div className="grid grid-cols-2 gap-5 md:grid-cols-3 md:gap-6 lg:grid-cols-4">
-          {artifacts.map((art) => (
-            <SortableCard
-              key={art.id}
-              artifact={art}
-              boardId={boardId}
-              categories={allCategories}
-              memberCategoryIds={(membershipsByArtifact[art.id] ?? []).map(
-                (m) => m.categoryId,
-              )}
-              signedImageUrl={
-                art.kind === "image" ? signedImageUrls[art.storagePath] : undefined
-              }
-              tags={tagsByArtifact[art.id] ?? []}
-              allTags={allTags}
-              provenance={provenanceByArtifact[art.id]}
-              canEdit={canEdit}
-            />
-          ))}
+          {artifacts.map((art) => {
+            const memberships = membershipsByArtifact[art.id] ?? [];
+            const isFavorite = !!memberships.find(
+              (m) => m.categoryId === categoryId,
+            )?.isFavorite;
+            return (
+              <SortableCard
+                key={art.id}
+                artifact={art}
+                boardId={boardId}
+                categories={allCategories}
+                memberCategoryIds={memberships.map((m) => m.categoryId)}
+                signedImageUrl={
+                  art.kind === "image"
+                    ? signedImageUrls[art.storagePath]
+                    : undefined
+                }
+                tags={tagsByArtifact[art.id] ?? []}
+                allTags={allTags}
+                provenance={provenanceByArtifact[art.id]}
+                canEdit={canEdit}
+                currentCategoryId={categoryId}
+                isFavorite={isFavorite}
+              />
+            );
+          })}
         </div>
       </SortableContext>
 
@@ -325,6 +337,12 @@ export function CategoryView({
               allTags={allTags}
               provenance={provenanceByArtifact[activeArtifact.id]}
               canEdit={false}
+              currentCategoryId={categoryId}
+              isFavorite={
+                !!(membershipsByArtifact[activeArtifact.id] ?? []).find(
+                  (m) => m.categoryId === categoryId,
+                )?.isFavorite
+              }
             />
           </div>
         ) : null}
@@ -354,6 +372,8 @@ function SortableCard({
   allTags,
   provenance,
   canEdit,
+  currentCategoryId,
+  isFavorite,
 }: {
   artifact: Artifact;
   boardId: string;
@@ -364,6 +384,8 @@ function SortableCard({
   allTags: Tag[];
   provenance?: ArtifactProvenance;
   canEdit: boolean;
+  currentCategoryId: string;
+  isFavorite: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: artifact.id, disabled: !canEdit });
@@ -397,6 +419,8 @@ function SortableCard({
         allTags={allTags}
         provenance={provenance}
         canEdit={canEdit}
+        currentCategoryId={currentCategoryId}
+        isFavorite={isFavorite}
       />
     </div>
   );

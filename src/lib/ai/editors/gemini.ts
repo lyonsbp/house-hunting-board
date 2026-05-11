@@ -134,22 +134,41 @@ async function runOne(args: {
   refs: EncodedRef[];
   variantIndex: number;
 }): Promise<ImageEditResult> {
-  const refHints = args.refs
-    .slice()
-    .sort((a, b) => a.index - b.index)
-    .map((r) => formatRefHint(r.index, r.role))
-    .join("\n");
-  const fullPrompt = refHints ? `${args.prompt}\n\n${refHints}` : args.prompt;
-
+  // Build interleaved text+image parts so Gemini can tell which inline
+  // image is the source vs which are reference guidance. Without these
+  // labels, with multiple refs the model can latch onto the references
+  // as the source and emit variations of them instead of editing the
+  // user's actual image.
   const parts: Array<
     { text: string } | { inline_data: { mime_type: string; data: string } }
-  > = [
-    { text: fullPrompt },
-    { inline_data: { mime_type: args.sourceMime, data: args.sourceB64 } },
-  ];
-  for (const ref of args.refs) {
+  > = [];
+
+  const sortedRefs = args.refs.slice().sort((a, b) => a.index - b.index);
+
+  if (sortedRefs.length > 0) {
+    parts.push({
+      text:
+        "You will receive a SOURCE image followed by one or more REFERENCE images. " +
+        "Your job is to edit the SOURCE image. The REFERENCE images are guidance only — " +
+        "do not output any of them or copy them as the result. Preserve the geometry, " +
+        "layout, and content of the SOURCE; only change what the user asks for, drawing " +
+        "stylistic guidance from the REFERENCES as labeled.",
+    });
+  }
+  parts.push({ text: "SOURCE image (edit this one):" });
+  parts.push({
+    inline_data: { mime_type: args.sourceMime, data: args.sourceB64 },
+  });
+  for (const ref of sortedRefs) {
+    parts.push({ text: formatRefHint(ref.index, ref.role) });
     parts.push({ inline_data: { mime_type: ref.mime, data: ref.b64 } });
   }
+  parts.push({
+    text:
+      sortedRefs.length > 0
+        ? `Edit instruction for the SOURCE image: ${args.prompt}`
+        : args.prompt,
+  });
 
   const body = {
     contents: [{ role: "user", parts }],

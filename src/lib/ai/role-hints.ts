@@ -7,12 +7,12 @@ import type { ReferenceRole } from "./types";
  * everywhere.
  */
 export const ROLE_HINT: Record<ReferenceRole, string> = {
-  style: "match the overall style and aesthetic of this image",
-  color: "match the color palette and tones shown in this image",
-  materials: "match the materials, textures, and finishes shown here",
-  scale: "match the scale and proportions shown here",
-  placement: "use this image as a guide for placement and composition",
-  other: "use this image as a visual reference",
+  style: "guidance only — apply the overall style and aesthetic from this image to the SOURCE",
+  color: "guidance only — apply the color palette and tones from this image to the SOURCE",
+  materials: "guidance only — apply the materials, textures, and finishes from this image to the SOURCE",
+  scale: "guidance only — apply the scale and proportions from this image to the SOURCE",
+  placement: "guidance only — use this image as a placement and composition reference for the SOURCE",
+  other: "guidance only — use this image as a visual reference; do not copy it",
 };
 
 /**

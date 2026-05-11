@@ -217,7 +217,7 @@ export type CategoryDrillDown = {
    */
   membershipsByArtifact: Record<
     string,
-    { categoryId: string; sortOrder: number }[]
+    { categoryId: string; sortOrder: number; isFavorite: boolean }[]
   >;
   tagsByArtifact: Record<string, { id: string; name: string }[]>;
   allTags: { id: string; name: string }[];
@@ -269,11 +269,15 @@ export async function loadCategoryDrillDown(
       .filter((a) => !cat.has(a.id))
       .map((a) => a.id);
   } else {
+    // Favorites land first, then sort_order within each group. Backed by
+    // the `(category_id, is_favorite desc, sort_order asc)` index added in
+    // migration 0015.
     const { data: rows } = await supabase
       .from("artifact_categories")
-      .select("artifact_id, sort_order")
+      .select("artifact_id, sort_order, is_favorite")
       .eq("category_id", categoryId)
-      .order("sort_order");
+      .order("is_favorite", { ascending: false })
+      .order("sort_order", { ascending: true });
     scopedArtifactIds = (rows ?? []).map((r) => r.artifact_id);
   }
 
@@ -318,7 +322,7 @@ export async function loadCategoryDrillDown(
       .in("id", scopedArtifactIds),
     supabase
       .from("artifact_categories")
-      .select("artifact_id, category_id, sort_order")
+      .select("artifact_id, category_id, sort_order, is_favorite")
       .in("artifact_id", scopedArtifactIds),
     supabase
       .from("artifact_tags")
@@ -346,11 +350,15 @@ export async function loadCategoryDrillDown(
 
   const membershipsByArtifact: Record<
     string,
-    { categoryId: string; sortOrder: number }[]
+    { categoryId: string; sortOrder: number; isFavorite: boolean }[]
   > = {};
   for (const m of membershipRows ?? []) {
     const list = membershipsByArtifact[m.artifact_id] ?? [];
-    list.push({ categoryId: m.category_id, sortOrder: m.sort_order });
+    list.push({
+      categoryId: m.category_id,
+      sortOrder: m.sort_order,
+      isFavorite: !!m.is_favorite,
+    });
     membershipsByArtifact[m.artifact_id] = list;
   }
 

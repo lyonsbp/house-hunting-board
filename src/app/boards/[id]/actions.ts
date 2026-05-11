@@ -473,6 +473,49 @@ export async function unassignCategory(input: {
   revalidatePath(`/boards/${boardId}`);
 }
 
+const SetFavoriteSchema = z.object({
+  boardId: z.string().uuid(),
+  categoryId: z.string().uuid(),
+  artifactId: z.string().uuid(),
+  favorite: z.boolean(),
+});
+
+/**
+ * Toggle the per-category favorite flag on an artifact membership.
+ * Favorites sort above non-favorites in the category drill-down.
+ *
+ * `favorite` is explicit (not a server-side toggle) so a double-click
+ * can't race itself into an unintended state. The artifact must already
+ * be a member of the category — we UPDATE rather than UPSERT, since
+ * favoriting an artifact you haven't first added to a category is
+ * meaningless. RLS enforces editor-role writes via the existing
+ * "artifact_categories: via artifact" policy.
+ */
+export async function setFavorite(input: {
+  boardId: string;
+  categoryId: string;
+  artifactId: string;
+  favorite: boolean;
+}): Promise<{ ok: true } | { error: string }> {
+  const user = await getCurrentUser();
+  if (!user) return { error: "Not authenticated" };
+  const parsed = SetFavoriteSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? "Invalid input" };
+  }
+
+  const supabase = await createClient();
+  const { error } = await supabase
+    .from("artifact_categories")
+    .update({ is_favorite: parsed.data.favorite })
+    .eq("artifact_id", parsed.data.artifactId)
+    .eq("category_id", parsed.data.categoryId);
+  if (error) return { error: error.message };
+
+  revalidatePath(`/boards/${parsed.data.boardId}`);
+  return { ok: true };
+}
+
 const CreateCategoryAndAssignSchema = z.object({
   boardId: z.string().uuid(),
   artifactId: z.string().uuid(),

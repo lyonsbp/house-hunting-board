@@ -28,7 +28,11 @@ const SERIF =
 
 type Tag = { id: string; name: string };
 type Category = { id: string; name: string };
-type Membership = { categoryId: string; sortOrder: number };
+type Membership = {
+  categoryId: string;
+  sortOrder: number;
+  isFavorite: boolean;
+};
 type ArtifactProvenance = {
   address: string | null;
   city: string | null;
@@ -180,6 +184,10 @@ export function CanvasView({
         >
           {artifacts.map((art) => {
             const pos = positions[art.id] ?? { x: 0, y: 0 };
+            const memberships = membershipsByArtifact[art.id] ?? [];
+            const isFavorite = !!memberships.find(
+              (m) => m.categoryId === categoryId,
+            )?.isFavorite;
             return (
               <DraggableCanvasCard
                 key={art.id}
@@ -189,9 +197,7 @@ export function CanvasView({
                 canEdit={canEdit}
                 boardId={boardId}
                 categories={allCategories}
-                memberCategoryIds={(
-                  membershipsByArtifact[art.id] ?? []
-                ).map((m) => m.categoryId)}
+                memberCategoryIds={memberships.map((m) => m.categoryId)}
                 signedImageUrl={
                   art.kind === "image"
                     ? signedImageUrls[art.storagePath]
@@ -200,6 +206,8 @@ export function CanvasView({
                 tags={tagsByArtifact[art.id] ?? []}
                 allTags={allTags}
                 provenance={provenanceByArtifact[art.id]}
+                currentCategoryId={categoryId}
+                isFavorite={isFavorite}
               />
             );
           })}
@@ -222,6 +230,8 @@ function DraggableCanvasCard({
   tags,
   allTags,
   provenance,
+  currentCategoryId,
+  isFavorite,
 }: {
   artifact: Artifact;
   x: number;
@@ -234,6 +244,8 @@ function DraggableCanvasCard({
   tags: Tag[];
   allTags: Tag[];
   provenance?: ArtifactProvenance;
+  currentCategoryId: string;
+  isFavorite: boolean;
 }) {
   const { attributes, listeners, setNodeRef, transform, isDragging } =
     useDraggable({
@@ -296,6 +308,8 @@ function DraggableCanvasCard({
         allTags={allTags}
         provenance={provenance}
         canEdit={canEdit}
+        currentCategoryId={currentCategoryId}
+        isFavorite={isFavorite}
       />
     </div>
   );
