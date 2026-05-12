@@ -71,3 +71,52 @@ swap; keep the storage layer abstracted so that swap is a one-file change.
 
 - `.env.local` for `pnpm dev`; `.dev.vars` for `pnpm preview` (wrangler);
   `wrangler secret put <NAME>` for production. See `.env.local.example`.
+
+## Verifying UI changes with the browser MCPs
+
+Two MCP servers are wired up in `.mcp.json` so you can drive a real browser
+against `localhost:3000`:
+
+- **`playwright`** (`@playwright/mcp`) — scripted flows, screenshots, form fills.
+- **`chrome-devtools`** (`chrome-devtools-mcp`) — perf, console, network inspection.
+
+**When to use it.** Any change under `src/app/**` that affects rendered output,
+click handlers, drag/drop, paste handling, or AI edits. Skip for pure refactors
+when unit tests cover the behavior. Type-check + Vitest verify code; this
+harness verifies the *feature*.
+
+**Preconditions** (do not boot these yourself — ask the user if they're missing):
+
+1. `pnpm exec supabase start` running (local Postgres on `:54321`).
+2. `pnpm exec supabase db reset` has been applied at least once.
+3. `pnpm dev` running on `:3000`.
+
+**First-run setup.** `pnpm dev:seed` once. Prints the seeded user
+(`test@local.dev`), board UUID, and the board URL. Idempotent — rerun any time.
+
+**Per-session login.**
+
+1. `pnpm dev:auth` → captures a fresh magic-link URL.
+2. Playwright MCP `browser_navigate` to that URL → hits `/auth/callback` →
+   lands logged in on `/`.
+3. Save `storageState` to `.claude/playwright-storage.json` (gitignored). Reuse
+   on subsequent calls; re-run `pnpm dev:auth` when 401s start appearing.
+
+**Happy paths to exercise** (pick what your change touches):
+
+1. Open seeded board → category tiles render.
+2. Drill into a category → grid view loads.
+3. Add an artifact (paste image, link, or note).
+4. Drag a card between categories.
+5. Toggle canvas mode → freeform drag.
+6. Trigger AI edit on an image (only if you touched `ai-edit-actions.ts` or
+   `src/lib/ai/`).
+
+**What to capture.** Screenshot before/after, console errors, failed network
+requests. Surface anything non-green to the user before claiming success.
+
+**Chrome DevTools MCP** is better for: perf regressions, layout/paint issues,
+network waterfall debugging, inspecting Supabase Realtime subscriptions.
+
+**Honesty rule.** If the harness can't be reached (no dev server, no Supabase,
+stale seed), say so explicitly rather than skipping verification silently.

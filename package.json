@@ -12,7 +12,9 @@
     "cf:build": "next build && cp .next/server/middleware.js .next/standalone/.next/server/middleware.js && opennextjs-cloudflare build --skipNextBuild",
     "preview": "pnpm cf:build && wrangler dev",
     "deploy": "bash scripts/deploy.sh",
-    "cf-typegen": "wrangler types --env-interface CloudflareEnv ./cloudflare-env.d.ts"
+    "cf-typegen": "wrangler types --env-interface CloudflareEnv ./cloudflare-env.d.ts",
+    "dev:seed": "node scripts/dev-seed.mjs",
+    "dev:auth": "node scripts/dev-auth.mjs"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
