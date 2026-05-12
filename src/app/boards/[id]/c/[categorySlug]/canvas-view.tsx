@@ -61,6 +61,7 @@ export function CanvasView({
   categoryId,
   artifacts,
   signedImageUrls,
+  signedZoomUrls,
   membershipsByArtifact,
   tagsByArtifact,
   allTags,
@@ -74,6 +75,7 @@ export function CanvasView({
   categoryId: string;
   artifacts: Artifact[];
   signedImageUrls: Record<string, string>;
+  signedZoomUrls: Record<string, string>;
   membershipsByArtifact: Record<string, Membership[]>;
   tagsByArtifact: Record<string, Tag[]>;
   allTags: Tag[];
@@ -203,6 +205,11 @@ export function CanvasView({
                     ? signedImageUrls[art.storagePath]
                     : undefined
                 }
+                signedZoomUrl={
+                  art.kind === "image"
+                    ? signedZoomUrls[art.storagePath]
+                    : undefined
+                }
                 tags={tagsByArtifact[art.id] ?? []}
                 allTags={allTags}
                 provenance={provenanceByArtifact[art.id]}
@@ -227,6 +234,7 @@ function DraggableCanvasCard({
   categories,
   memberCategoryIds,
   signedImageUrl,
+  signedZoomUrl,
   tags,
   allTags,
   provenance,
@@ -241,6 +249,7 @@ function DraggableCanvasCard({
   categories: Category[];
   memberCategoryIds: string[];
   signedImageUrl?: string;
+  signedZoomUrl?: string;
   tags: Tag[];
   allTags: Tag[];
   provenance?: ArtifactProvenance;
@@ -304,6 +313,7 @@ function DraggableCanvasCard({
         categories={categories}
         memberCategoryIds={memberCategoryIds}
         signedImageUrl={signedImageUrl}
+        signedZoomUrl={signedZoomUrl}
         tags={tags}
         allTags={allTags}
         provenance={provenance}

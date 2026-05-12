@@ -63,6 +63,7 @@ export function CategoryView({
   categoryName,
   artifacts: initialArtifacts,
   signedImageUrls,
+  signedZoomUrls,
   membershipsByArtifact,
   tagsByArtifact,
   allTags,
@@ -79,6 +80,7 @@ export function CategoryView({
   categoryName: string;
   artifacts: Artifact[];
   signedImageUrls: Record<string, string>;
+  signedZoomUrls: Record<string, string>;
   membershipsByArtifact: Record<string, Membership[]>;
   tagsByArtifact: Record<string, Tag[]>;
   allTags: Tag[];
@@ -300,6 +302,11 @@ export function CategoryView({
                     ? signedImageUrls[art.storagePath]
                     : undefined
                 }
+                signedZoomUrl={
+                  art.kind === "image"
+                    ? signedZoomUrls[art.storagePath]
+                    : undefined
+                }
                 tags={tagsByArtifact[art.id] ?? []}
                 allTags={allTags}
                 provenance={provenanceByArtifact[art.id]}
@@ -331,6 +338,11 @@ export function CategoryView({
               signedImageUrl={
                 activeArtifact.kind === "image"
                   ? signedImageUrls[activeArtifact.storagePath]
+                  : undefined
+              }
+              signedZoomUrl={
+                activeArtifact.kind === "image"
+                  ? signedZoomUrls[activeArtifact.storagePath]
                   : undefined
               }
               tags={tagsByArtifact[activeArtifact.id] ?? []}
@@ -367,6 +379,7 @@ function SortableCard({
   boardId,
   categories,
   signedImageUrl,
+  signedZoomUrl,
   tags,
   memberCategoryIds,
   allTags,
@@ -379,6 +392,7 @@ function SortableCard({
   boardId: string;
   categories: Category[];
   signedImageUrl?: string;
+  signedZoomUrl?: string;
   tags: Tag[];
   memberCategoryIds: string[];
   allTags: Tag[];
@@ -415,6 +429,7 @@ function SortableCard({
         categories={categories}
         memberCategoryIds={memberCategoryIds}
         signedImageUrl={signedImageUrl}
+        signedZoomUrl={signedZoomUrl}
         tags={tags}
         allTags={allTags}
         provenance={provenance}

@@ -29,3 +29,27 @@
       scale(var(--fan-scale, 1));
   }
 }
+
+/*
+ * Skeleton shimmer for image placeholders. Used by ArtifactImage when
+ * we don't have an LQIP for the source (AI-edit outputs, scraped
+ * listing photos). A diagonal gradient sweep at ~1.6s reads as
+ * "content arriving" without being noisy.
+ */
+.shimmer {
+  background: linear-gradient(
+    100deg,
+    rgba(245, 245, 244, 0) 30%,
+    rgba(255, 255, 255, 0.7) 50%,
+    rgba(245, 245, 244, 0) 70%
+  );
+  background-size: 200% 100%;
+  animation: shimmer-sweep 1.6s ease-in-out infinite;
+}
+@keyframes shimmer-sweep {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .shimmer { animation: none; }
+}

@@ -4,6 +4,8 @@ import type { CategoryTile as CategoryTileData } from "@/lib/board-data";
 import { UNCATEGORIZED_ID } from "@/lib/board-data-shared";
 import { slugify } from "@/lib/slug";
 
+import { ArtifactImage } from "./artifact-image";
+
 const SERIF =
   '"Cochin", "Hoefler Text", "Iowan Old Style", "Palatino Linotype", Georgia, serif';
 
@@ -135,14 +137,14 @@ export function CategoryTile({
                       zIndex: i + 1,
                     } as React.CSSProperties
                   }
-                  className="fan-card absolute inset-x-[18%] inset-y-[14%] origin-bottom overflow-hidden rounded-md border-2 border-white shadow-md transition-transform duration-300 ease-out"
+                  className="fan-card absolute inset-x-[18%] inset-y-[14%] origin-bottom rounded-md border-2 border-white shadow-md transition-transform duration-300 ease-out"
                 >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
+                  <ArtifactImage
                     src={url}
                     alt=""
-                    className="h-full w-full object-cover"
-                    loading="lazy"
+                    fit="cover"
+                    aspectRatio={1}
+                    className="h-full w-full rounded-[2px]"
                   />
                 </div>
               );

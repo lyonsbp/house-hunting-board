@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { getCurrentUser } from "@/lib/auth";
+import { readImageDimensions } from "@/lib/image-meta";
 import {
   getDailyScrapeLimit,
   isSuperadminEmail,
@@ -491,6 +492,8 @@ async function importOneImage(
     return { ok: false, error: shortError(args.imageUrl, uploadError.message) };
   }
 
+  const dims = readImageDimensions(buf, ct);
+
   const { data: artifactRow, error: artifactError } = await args.supabase
     .from("artifacts")
     .insert({
@@ -503,6 +506,7 @@ async function importOneImage(
         scraped_at: args.scrapedAt,
         image_source_url: args.imageUrl,
         image_index: args.imageIndex,
+        ...(dims ? { width: dims.width, height: dims.height } : {}),
       },
     })
     .select("id")

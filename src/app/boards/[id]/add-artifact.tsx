@@ -4,6 +4,8 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@heroui/react";
 
+import { prepareImageForUpload } from "@/lib/image-prep";
+
 import {
   createImageArtifact,
   createLinkArtifact,
@@ -193,6 +195,9 @@ function ImageForm({
     imageInitialState,
   );
   const formRef = useRef<HTMLFormElement>(null);
+  const widthRef = useRef<HTMLInputElement>(null);
+  const heightRef = useRef<HTMLInputElement>(null);
+  const lqipRef = useRef<HTMLInputElement>(null);
 
   // Reset the form after each successful submit so the user can add
   // another image without manually clearing the file input. Distinct
@@ -204,15 +209,42 @@ function ImageForm({
     }
   }, [state, pending]);
 
+  // Measure dims + render an LQIP in the browser as soon as the user
+  // picks a file, and stash the values in hidden inputs so the server
+  // action gets them alongside the upload. Failing this step is
+  // non-fatal — the action will fall back to parsing dims server-side.
+  async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.currentTarget.files?.[0];
+    if (widthRef.current) widthRef.current.value = "";
+    if (heightRef.current) heightRef.current.value = "";
+    if (lqipRef.current) lqipRef.current.value = "";
+    if (!file) return;
+    const prepared = await prepareImageForUpload(file).catch(() => null);
+    if (!prepared) return;
+    if (widthRef.current && prepared.width) {
+      widthRef.current.value = String(prepared.width);
+    }
+    if (heightRef.current && prepared.height) {
+      heightRef.current.value = String(prepared.height);
+    }
+    if (lqipRef.current && prepared.lqip) {
+      lqipRef.current.value = prepared.lqip;
+    }
+  }
+
   return (
     <>
       <form ref={formRef} action={action} className="flex flex-col gap-3">
         <input type="hidden" name="boardId" value={boardId} />
+        <input type="hidden" name="width" ref={widthRef} />
+        <input type="hidden" name="height" ref={heightRef} />
+        <input type="hidden" name="lqip" ref={lqipRef} />
         <input
           name="file"
           type="file"
           accept="image/jpeg,image/png,image/webp,image/gif"
           required
+          onChange={onFileChange}
           className="block w-full cursor-pointer rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm text-stone-700 file:mr-3 file:cursor-pointer file:rounded-md file:border-0 file:bg-stone-900 file:px-3 file:py-1.5 file:text-xs file:uppercase file:tracking-wider file:text-stone-50 hover:border-stone-300"
         />
         <input

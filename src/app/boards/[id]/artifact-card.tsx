@@ -22,6 +22,8 @@ import { resizeRefImage } from "@/lib/ai/ref-image-resize";
 import type { ReferenceRole } from "@/lib/ai/types";
 import { UNCATEGORIZED_ID } from "@/lib/board-data-shared";
 
+import { ArtifactImage } from "./artifact-image";
+
 import {
   addComment,
   addTagToArtifact,
@@ -72,6 +74,7 @@ export function ArtifactCard({
   artifact,
   boardId,
   signedImageUrl,
+  signedZoomUrl,
   categories,
   memberCategoryIds,
   tags,
@@ -84,6 +87,9 @@ export function ArtifactCard({
   artifact: Artifact;
   boardId: string;
   signedImageUrl?: string;
+  /** Larger / un-transformed variant for the lightbox. Falls back to
+   *  signedImageUrl when omitted. */
+  signedZoomUrl?: string;
   categories: Category[];
   memberCategoryIds: string[];
   tags: Tag[];
@@ -157,6 +163,7 @@ export function ArtifactCard({
       <CardBody
         artifact={artifact}
         signedImageUrl={signedImageUrl}
+        signedZoomUrl={signedZoomUrl}
         provenance={provenance}
       />
 
@@ -348,10 +355,12 @@ function TagsRow({ tags }: { tags: Tag[] }) {
 function CardBody({
   artifact,
   signedImageUrl,
+  signedZoomUrl,
   provenance,
 }: {
   artifact: Artifact;
   signedImageUrl?: string;
+  signedZoomUrl?: string;
   provenance?: Provenance;
 }) {
   switch (artifact.kind) {
@@ -360,6 +369,7 @@ function CardBody({
         <ImageBody
           artifact={artifact}
           signedImageUrl={signedImageUrl}
+          signedZoomUrl={signedZoomUrl}
           provenance={provenance}
         />
       );
@@ -375,42 +385,53 @@ function CardBody({
 function ImageBody({
   artifact,
   signedImageUrl,
+  signedZoomUrl,
   provenance,
 }: {
   artifact: Extract<Artifact, { kind: "image" }>;
   signedImageUrl?: string;
+  signedZoomUrl?: string;
   provenance?: Provenance;
 }) {
   const provenanceLabel = provenance ? formatProvenance(provenance) : null;
   const [zoomed, setZoomed] = useState(false);
   const isAiEdited = !!artifact.aiEditOf;
+  const aspectRatio =
+    artifact.width && artifact.height
+      ? artifact.width / artifact.height
+      : undefined;
+  const zoomSrc = signedZoomUrl ?? signedImageUrl;
   return (
     <figure>
-      <div className="relative overflow-hidden rounded-xl bg-stone-100 shadow-[0_2px_24px_-10px_rgba(0,0,0,0.25)]">
-        {signedImageUrl ? (
-          <button
-            type="button"
-            onClick={() => setZoomed(true)}
-            aria-label="Zoom image"
-            className="block w-full cursor-zoom-in"
-          >
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={signedImageUrl}
-              alt={artifact.body || "Board image"}
-              className="block h-auto w-full"
-              loading="lazy"
-              draggable={false}
-            />
-          </button>
-        ) : (
-          <div className="aspect-square animate-pulse" />
-        )}
-        {isAiEdited && <AiBadge />}
-      </div>
-      {zoomed && signedImageUrl && (
+      {signedImageUrl ? (
+        <button
+          type="button"
+          onClick={() => setZoomed(true)}
+          aria-label="Zoom image"
+          className="relative block w-full cursor-zoom-in"
+        >
+          <ArtifactImage
+            src={signedImageUrl}
+            alt={artifact.body || "Board image"}
+            aspectRatio={aspectRatio}
+            lqip={artifact.lqip}
+            className="rounded-xl shadow-[0_2px_24px_-10px_rgba(0,0,0,0.25)]"
+            draggable={false}
+          />
+          {isAiEdited && <AiBadge />}
+        </button>
+      ) : (
+        <div
+          className="relative overflow-hidden rounded-xl bg-stone-100 shadow-[0_2px_24px_-10px_rgba(0,0,0,0.25)]"
+          style={{ aspectRatio: aspectRatio ?? 1 }}
+        >
+          <div className="absolute inset-0 shimmer" />
+          {isAiEdited && <AiBadge />}
+        </div>
+      )}
+      {zoomed && zoomSrc && (
         <ImageZoomDialog
-          src={signedImageUrl}
+          src={zoomSrc}
           alt={artifact.body || "Board image"}
           caption={artifact.body}
           onClose={() => setZoomed(false)}

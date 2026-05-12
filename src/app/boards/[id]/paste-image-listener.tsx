@@ -3,6 +3,8 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
+import { prepareImageForUpload } from "@/lib/image-prep";
+
 import { createImageArtifact } from "./actions";
 
 type Status =
@@ -51,9 +53,15 @@ export function PasteImageListener({ boardId }: { boardId: string }) {
             });
 
       setStatus({ kind: "uploading" });
+      const prepared = await prepareImageForUpload(named).catch(() => null);
       const fd = new FormData();
       fd.append("boardId", boardId);
-      fd.append("file", named);
+      fd.append("file", prepared?.file ?? named);
+      if (prepared?.width && prepared.height) {
+        fd.append("width", String(prepared.width));
+        fd.append("height", String(prepared.height));
+      }
+      if (prepared?.lqip) fd.append("lqip", prepared.lqip);
 
       const result = await createImageArtifact({ status: "idle" }, fd);
       if (result.status === "error") {

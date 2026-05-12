@@ -96,7 +96,13 @@ export default async function CategoryDrillDownPage({
   const panelThumbPaths = Array.from(
     new Set(panelTiles.flatMap((t) => t.thumbnailPaths)),
   );
-  const panelThumbUrls = await signImagePaths(panelThumbPaths);
+  // Swim-lane drop chips are tiny (~80px CSS each), so a 240px variant
+  // is plenty even at 3x DPR.
+  const panelThumbUrls = await signImagePaths(panelThumbPaths, {
+    width: 240,
+    quality: 70,
+    resize: "cover",
+  });
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
@@ -128,6 +134,7 @@ export default async function CategoryDrillDownPage({
           categoryId={resolvedCategoryId}
           artifacts={drill.artifacts}
           signedImageUrls={drill.signedImageUrls}
+          signedZoomUrls={drill.signedZoomUrls}
           membershipsByArtifact={drill.membershipsByArtifact}
           tagsByArtifact={drill.tagsByArtifact}
           allTags={drill.allTags}
@@ -144,6 +151,7 @@ export default async function CategoryDrillDownPage({
           categoryName={displayName}
           artifacts={drill.artifacts}
           signedImageUrls={drill.signedImageUrls}
+          signedZoomUrls={drill.signedZoomUrls}
           membershipsByArtifact={drill.membershipsByArtifact}
           tagsByArtifact={drill.tagsByArtifact}
           allTags={drill.allTags}

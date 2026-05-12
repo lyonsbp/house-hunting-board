@@ -223,7 +223,11 @@ export type CategoryDrillDown = {
   allTags: { id: string; name: string }[];
   allCategories: { id: string; name: string }[];
   provenanceByArtifact: Record<string, ArtifactProvenance>;
+  /** Transformed signed URLs sized for the grid (~720px wide). */
   signedImageUrls: Record<string, string>;
+  /** Larger signed URLs for the lightbox zoom; un-transformed so the
+   *  Smart CDN serves the original bytes when the user clicks in. */
+  signedZoomUrls: Record<string, string>;
 };
 
 /**
@@ -301,6 +305,7 @@ export async function loadCategoryDrillDown(
       allCategories: allCategories ?? [],
       provenanceByArtifact: {},
       signedImageUrls: {},
+      signedZoomUrls: {},
     };
   }
 
@@ -405,7 +410,15 @@ export async function loadCategoryDrillDown(
   for (const a of artifacts) {
     if (a.kind === "image" && a.storagePath) imagePaths.push(a.storagePath);
   }
-  const signedImageUrls = await signImagePaths(imagePaths);
+  const [signedImageUrls, signedZoomUrls] = await Promise.all([
+    // Grid + canvas variant: width=720 covers a 360px CSS card at 2x DPR
+    // with headroom. quality=75 + Supabase's auto-WebP cuts payloads by
+    // ~5-10x vs. originals. Billing is per origin image, so requesting
+    // a second variant of the same source costs nothing extra.
+    signImagePaths(imagePaths, { width: 720, quality: 75 }),
+    // Zoom variant: un-transformed so the lightbox shows source pixels.
+    signImagePaths(imagePaths),
+  ]);
 
   return {
     category,
@@ -416,6 +429,7 @@ export async function loadCategoryDrillDown(
     allCategories: allCategoriesData ?? [],
     provenanceByArtifact,
     signedImageUrls,
+    signedZoomUrls,
   };
 }
 
@@ -516,20 +530,50 @@ export async function loadCanvasPositions(
  *
  * The caller is responsible for only passing in paths the viewer is
  * allowed to see (already filtered via the user-scoped client's RLS).
+ *
+ * When `transform` is provided, each URL is signed with Supabase Image
+ * Transformations baked into the token, so the CDN returns a resized /
+ * recompressed variant (and a WebP when the client accepts it). Pass
+ * the render-context width here, not the source image's width.
  */
+type SignTransform = {
+  width?: number;
+  height?: number;
+  quality?: number;
+  resize?: "cover" | "contain" | "fill";
+};
+
 export async function signImagePaths(
   paths: string[],
+  transform?: SignTransform,
 ): Promise<Record<string, string>> {
   if (paths.length === 0) return {};
   const admin = createAdminClient();
-  const { data: signed } = await admin.storage
-    .from("artifacts")
-    .createSignedUrls(paths, 3600);
   const out: Record<string, string> = {};
-  for (const item of signed ?? []) {
-    if (item.path && item.signedUrl) {
-      out[item.path] = item.signedUrl;
+
+  if (!transform) {
+    // Batch path — one network call regardless of N.
+    const { data: signed } = await admin.storage
+      .from("artifacts")
+      .createSignedUrls(paths, 3600);
+    for (const item of signed ?? []) {
+      if (item.path && item.signedUrl) out[item.path] = item.signedUrl;
     }
+    return out;
+  }
+
+  // Transform options must be embedded into each token, so we sign
+  // one-by-one. Parallelized across paths; per-path cost is tiny.
+  const results = await Promise.all(
+    paths.map(async (path) => {
+      const { data } = await admin.storage
+        .from("artifacts")
+        .createSignedUrl(path, 3600, { transform });
+      return { path, url: data?.signedUrl };
+    }),
+  );
+  for (const { path, url } of results) {
+    if (url) out[path] = url;
   }
   return out;
 }

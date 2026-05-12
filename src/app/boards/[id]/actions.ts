@@ -8,6 +8,7 @@ import { z } from "zod";
 
 import { getCurrentUser } from "@/lib/auth";
 import { UNCATEGORIZED_ID } from "@/lib/board-data-shared";
+import { readImageDimensions } from "@/lib/image-meta";
 import { slugify } from "@/lib/slug";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
@@ -247,6 +248,16 @@ const ImageSchema = z.object({
   boardId: z.string().uuid(),
   caption: z.string().trim().max(1000).optional(),
   categoryId: z.string().uuid().optional(),
+  // Optional client-supplied image metadata. The client measures these
+  // before submitting so the grid can render an exact aspect-ratio box
+  // immediately. If absent we parse dims from bytes server-side.
+  width: z.coerce.number().int().positive().max(50_000).optional(),
+  height: z.coerce.number().int().positive().max(50_000).optional(),
+  lqip: z
+    .string()
+    .max(4_000)
+    .regex(/^data:image\/(jpeg|png|webp);base64,/)
+    .optional(),
 });
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -283,6 +294,9 @@ export async function createImageArtifact(
     boardId: formData.get("boardId"),
     caption: formData.get("caption") || undefined,
     categoryId: formData.get("categoryId") || undefined,
+    width: formData.get("width") || undefined,
+    height: formData.get("height") || undefined,
+    lqip: formData.get("lqip") || undefined,
   });
   if (!parsed.success) {
     return {
@@ -305,6 +319,27 @@ export async function createImageArtifact(
   const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
   const path = `boards/${parsed.data.boardId}/${crypto.randomUUID()}.${ext}`;
 
+  // Prefer the client-measured dims (zero extra bytes read). Fall back
+  // to parsing the file header server-side so non-browser submitters
+  // (e.g. CLI tests, future automation) still get exact aspect ratios.
+  let width = parsed.data.width;
+  let height = parsed.data.height;
+  if (!width || !height) {
+    const buf = new Uint8Array(await file.arrayBuffer());
+    const dims = readImageDimensions(buf, file.type);
+    if (dims) {
+      width = dims.width;
+      height = dims.height;
+    }
+  }
+
+  const metadata: Record<string, unknown> = {};
+  if (width && height) {
+    metadata.width = width;
+    metadata.height = height;
+  }
+  if (parsed.data.lqip) metadata.lqip = parsed.data.lqip;
+
   const supabase = await createClient();
   const { error: uploadError } = await supabase.storage
     .from("artifacts")
@@ -326,6 +361,7 @@ export async function createImageArtifact(
       kind: "image",
       storage_path: path,
       body: parsed.data.caption ?? null,
+      metadata,
     })
     .select("id")
     .single();

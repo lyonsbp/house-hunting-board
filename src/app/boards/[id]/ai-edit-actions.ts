@@ -35,6 +35,7 @@ function pickModel(raw: FormDataEntryValue | null): ImageEditModel {
   return found ? (raw as ImageEditModel) : DEFAULT_MODEL;
 }
 import { getCurrentUser } from "@/lib/auth";
+import { readImageDimensions } from "@/lib/image-meta";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -309,6 +310,8 @@ export async function editImageArtifact(
     return { status: "error", code: "storage", message: uploadError.message };
   }
 
+  const outputDims = readImageDimensions(outputBytes, outputMime);
+
   const { data: childArtifact, error: childError } = await supabase
     .from("artifacts")
     .insert({
@@ -320,6 +323,9 @@ export async function editImageArtifact(
         ai_edit_of: parent.id,
         prompt,
         model,
+        ...(outputDims
+          ? { width: outputDims.width, height: outputDims.height }
+          : {}),
         ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
       },
     })

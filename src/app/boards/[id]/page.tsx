@@ -273,7 +273,13 @@ export default async function BoardPage({
   const thumbnailPaths = Array.from(
     new Set(dashboardSummary.tiles.flatMap((t) => t.thumbnailPaths)),
   );
-  const signedThumbUrls = await signImagePaths(thumbnailPaths);
+  // Dashboard tiles render thumbs in a small "fan deck" at ~140px CSS,
+  // so a single 320px-wide transform variant is plenty for 2x DPR.
+  const signedThumbUrls = await signImagePaths(thumbnailPaths, {
+    width: 320,
+    quality: 70,
+    resize: "cover",
+  });
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
