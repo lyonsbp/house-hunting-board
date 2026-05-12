@@ -531,10 +531,15 @@ export async function loadCanvasPositions(
  * The caller is responsible for only passing in paths the viewer is
  * allowed to see (already filtered via the user-scoped client's RLS).
  *
- * When `transform` is provided, each URL is signed with Supabase Image
- * Transformations baked into the token, so the CDN returns a resized /
- * recompressed variant (and a WebP when the client accepts it). Pass
- * the render-context width here, not the source image's width.
+ * When `transform` is provided AND the SUPABASE_IMAGE_TRANSFORMS flag
+ * is on, each URL is signed with Supabase Image Transformations baked
+ * into the token, so the CDN returns a resized / recompressed variant
+ * (and a WebP when the client accepts it). Pass the render-context
+ * width here, not the source image's width.
+ *
+ * Image Transformations is a Pro-and-above feature on Supabase. The
+ * flag defaults OFF so the app works on the free tier without 404-ing
+ * transformed URLs; flip it on once the project is on Pro.
  */
 type SignTransform = {
   width?: number;
@@ -542,6 +547,13 @@ type SignTransform = {
   quality?: number;
   resize?: "cover" | "contain" | "fill";
 };
+
+function transformsEnabled(): boolean {
+  const raw = process.env.SUPABASE_IMAGE_TRANSFORMS;
+  if (!raw) return false;
+  const v = raw.toLowerCase();
+  return v === "1" || v === "true" || v === "yes" || v === "on";
+}
 
 export async function signImagePaths(
   paths: string[],
@@ -551,7 +563,8 @@ export async function signImagePaths(
   const admin = createAdminClient();
   const out: Record<string, string> = {};
 
-  if (!transform) {
+  const useTransform = transform && transformsEnabled();
+  if (!useTransform) {
     // Batch path — one network call regardless of N.
     const { data: signed } = await admin.storage
       .from("artifacts")
