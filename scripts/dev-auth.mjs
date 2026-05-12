@@ -1,55 +1,69 @@
 #!/usr/bin/env node
-// Mint a one-shot magic-link URL for the seeded test user. Pipe the URL into
-// Playwright MCP's browser_navigate to land authenticated against localhost:3000.
+// Print the most-recent magic-link URL sent to the dev test user.
 //
-// Requires `pnpm exec supabase start` running and `pnpm dev:seed` to have been
-// run at least once.
-
-import { execSync } from "node:child_process";
-import { createClient } from "@supabase/supabase-js";
+// Why poll mail instead of `admin.generateLink`: the app's /auth/callback only
+// accepts the PKCE `?code=` flow, and that flow requires a verifier cookie
+// that was set when the BROWSER initiated `signInWithOtp`. admin-generated
+// links use the implicit flow and fail. So the harness drives the real /login
+// form first (which sets the verifier cookie), then this script grabs the
+// resulting link out of Mailpit.
+//
+// Preconditions:
+//   1. `pnpm exec supabase start` running (Mailpit on :54324).
+//   2. The harness has already POSTed the /login form for TEST_EMAIL in the
+//      browser session it will reuse to navigate to the printed link.
 
 const TEST_EMAIL = "test@local.dev";
-const REDIRECT_TO = "http://localhost:3000/auth/callback";
+const MAILPIT_URL = "http://127.0.0.1:54324";
+const POLL_MS = 250;
+const TIMEOUT_MS = 10_000;
 
-function readSupabaseLocalCreds() {
-  const raw = execSync("pnpm exec supabase status -o env", {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "inherit"],
-  });
-  const env = Object.fromEntries(
-    raw
-      .split("\n")
-      .map((line) => line.trim())
-      .filter((line) => /^[A-Z_][A-Z0-9_]*=/.test(line))
-      .map((line) => {
-        const eq = line.indexOf("=");
-        return [line.slice(0, eq), line.slice(eq + 1).replace(/^"|"$/g, "")];
-      }),
-  );
-  const url = env.API_URL;
-  const serviceKey = env.SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) {
-    throw new Error(
-      "Could not read API_URL / SERVICE_ROLE_KEY from `supabase status`. Is the local stack running?",
-    );
+const linkRegex =
+  /https?:\/\/127\.0\.0\.1:54321\/auth\/v1\/verify\?[^"\s)]+/;
+
+async function fetchLatestMessageId() {
+  const url = `${MAILPIT_URL}/api/v1/search?query=${encodeURIComponent(
+    `to:${TEST_EMAIL}`,
+  )}&limit=1`;
+  const res = await fetch(url);
+  if (!res.ok) {
+    throw new Error(`Mailpit search failed: ${res.status} ${res.statusText}`);
   }
-  return { url, serviceKey };
+  const body = await res.json();
+  return body.messages?.[0]?.ID ?? null;
 }
 
-const { url, serviceKey } = readSupabaseLocalCreds();
-const admin = createClient(url, serviceKey, {
-  auth: { autoRefreshToken: false, persistSession: false },
-});
-
-const { data, error } = await admin.auth.admin.generateLink({
-  type: "magiclink",
-  email: TEST_EMAIL,
-  options: { redirectTo: REDIRECT_TO },
-});
-if (error) throw error;
-
-const link = data.properties?.action_link;
-if (!link) {
-  throw new Error("generateLink returned no action_link");
+async function fetchMessageBody(id) {
+  const res = await fetch(`${MAILPIT_URL}/api/v1/message/${id}`);
+  if (!res.ok) {
+    throw new Error(`Mailpit fetch failed: ${res.status} ${res.statusText}`);
+  }
+  const body = await res.json();
+  return `${body.HTML ?? ""}\n${body.Text ?? ""}`;
 }
-console.log(link);
+
+const deadline = Date.now() + TIMEOUT_MS;
+let id = null;
+while (Date.now() < deadline) {
+  id = await fetchLatestMessageId();
+  if (id) break;
+  await new Promise((r) => setTimeout(r, POLL_MS));
+}
+if (!id) {
+  console.error(
+    `No magic-link email found for ${TEST_EMAIL} within ${TIMEOUT_MS}ms.`,
+  );
+  console.error(
+    "Did the harness submit the /login form first? (See AGENTS.md playbook.)",
+  );
+  process.exit(1);
+}
+
+const body = await fetchMessageBody(id);
+const match = body.match(linkRegex);
+if (!match) {
+  console.error("Found an email but no verify URL in body.");
+  console.error(body.slice(0, 500));
+  process.exit(1);
+}
+console.log(match[0].replace(/&amp;/g, "&"));

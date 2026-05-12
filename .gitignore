@@ -47,5 +47,10 @@ cloudflare-env.d.ts
 *.tsbuildinfo
 next-env.d.ts
 
-# Playwright MCP storage cache (local-only)
-/.claude/playwright-storage.json
+# Playwright MCP artifacts (page snapshots, console logs)
+/.playwright-mcp/
+
+# Playwright test outputs
+/playwright-report/
+/test-results/
+/tests/e2e/.auth/

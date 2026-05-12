@@ -94,13 +94,20 @@ harness verifies the *feature*.
 **First-run setup.** `pnpm dev:seed` once. Prints the seeded user
 (`test@local.dev`), board UUID, and the board URL. Idempotent — rerun any time.
 
-**Per-session login.**
+**Per-session login.** The callback uses the PKCE flow, so the *same browser*
+that submits the login form must also click the resulting magic link — the
+verifier cookie is scoped to that browser session. `admin.generateLink` will
+not work here.
 
-1. `pnpm dev:auth` → captures a fresh magic-link URL.
-2. Playwright MCP `browser_navigate` to that URL → hits `/auth/callback` →
-   lands logged in on `/`.
-3. Save `storageState` to `.claude/playwright-storage.json` (gitignored). Reuse
-   on subsequent calls; re-run `pnpm dev:auth` when 401s start appearing.
+1. Playwright MCP `browser_navigate` → `http://localhost:3000/login`.
+2. Fill the email textbox with `test@local.dev` and click **Send magic link**.
+3. `pnpm dev:auth` → polls Mailpit (`:54324`) and prints the magic-link URL.
+4. Playwright MCP `browser_navigate` to that URL in the *same session* → hits
+   `/auth/callback?code=...` → lands logged in on `/`.
+
+The Playwright MCP browser persists cookies for the lifetime of its process,
+so steps 1–4 only need to happen once per harness boot. If you see 401s later,
+re-run steps 1–4 to refresh.
 
 **Happy paths to exercise** (pick what your change touches):
 
@@ -120,3 +127,8 @@ network waterfall debugging, inspecting Supabase Realtime subscriptions.
 
 **Honesty rule.** If the harness can't be reached (no dev server, no Supabase,
 stale seed), say so explicitly rather than skipping verification silently.
+
+**Codified smoke tests.** `pnpm test:e2e` runs the Playwright suite in
+`tests/e2e/`. The `auth.setup.ts` project handles login (seed user + Mailpit
+poll) once and saves `storageState`; specs reuse it. Add a new spec here when a
+flow is worth regression-protecting beyond ad-hoc verification.
