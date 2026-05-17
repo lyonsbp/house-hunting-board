@@ -285,19 +285,21 @@ function ImageUploadToast({
   boardId: string;
   state: CreateImageArtifactState;
 }) {
-  const [visible, setVisible] = useState<{
-    name: string;
-    slug: string;
-  } | null>(null);
+  // Derive visibility from `state` directly. Track only which state the user
+  // (or the auto-hide timer) has dismissed so a fresh success re-shows the
+  // toast. useActionState returns a new object per dispatch, so reference
+  // equality cleanly distinguishes "same success" from "another success".
+  const [dismissed, setDismissed] = useState<CreateImageArtifactState | null>(
+    null,
+  );
 
   useEffect(() => {
-    if (state.status !== "success") return;
-    setVisible({ name: state.categoryName, slug: state.categorySlug });
-    const t = setTimeout(() => setVisible(null), 5000);
+    if (state.status !== "success" || dismissed === state) return;
+    const t = setTimeout(() => setDismissed(state), 5000);
     return () => clearTimeout(t);
-  }, [state]);
+  }, [state, dismissed]);
 
-  if (!visible) return null;
+  if (state.status !== "success" || dismissed === state) return null;
 
   return (
     <div
@@ -307,10 +309,10 @@ function ImageUploadToast({
     >
       <span>
         Image added to{" "}
-        <span className="font-medium text-stone-900">{visible.name}</span>
+        <span className="font-medium text-stone-900">{state.categoryName}</span>
       </span>
       <Link
-        href={`/boards/${boardId}/c/${visible.slug}`}
+        href={`/boards/${boardId}/c/${state.categorySlug}`}
         className="text-[11px] uppercase tracking-wider text-amber-700 hover:text-amber-900"
         style={{ letterSpacing: "0.12em" }}
       >
@@ -318,7 +320,7 @@ function ImageUploadToast({
       </Link>
       <button
         type="button"
-        onClick={() => setVisible(null)}
+        onClick={() => setDismissed(state)}
         aria-label="Dismiss"
         className="text-stone-400 hover:text-stone-700"
       >
