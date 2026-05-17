@@ -43,14 +43,14 @@ yarn-error.log*
 .wrangler/
 cloudflare-env.d.ts
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
-# Playwright MCP artifacts (page snapshots, console logs)
-/.playwright-mcp/
-
 # Playwright test outputs
 /playwright-report/
 /test-results/
 /tests/e2e/.auth/
+
+# Playwright MCP artifacts (page snapshots, console logs)
+/.playwright-mcp/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

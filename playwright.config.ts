@@ -1,6 +1,20 @@
 import { defineConfig, devices } from "@playwright/test";
+import { config as loadEnv } from "dotenv";
+import path from "node:path";
+
+// Mirror Next.js's env precedence so either file works for local testing.
+for (const file of [
+  ".env.development.local",
+  ".env.local",
+  ".env.development",
+  ".env",
+]) {
+  loadEnv({ path: path.resolve(__dirname, file), quiet: true });
+}
 
 const AUTH_FILE = "tests/e2e/.auth/user.json";
+const baseURL = process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:3000";
+const isDefaultLocal = !process.env.PLAYWRIGHT_BASE_URL;
 
 export default defineConfig({
   testDir: "./tests/e2e",
@@ -10,7 +24,7 @@ export default defineConfig({
   workers: 1,
   reporter: process.env.CI ? "line" : "list",
   use: {
-    baseURL: "http://localhost:3000",
+    baseURL,
     trace: "retain-on-failure",
   },
   projects: [
@@ -27,10 +41,12 @@ export default defineConfig({
       dependencies: ["setup"],
     },
   ],
-  webServer: {
-    command: "pnpm dev",
-    url: "http://localhost:3000",
-    reuseExistingServer: true,
-    timeout: 120_000,
-  },
+  webServer: isDefaultLocal
+    ? {
+        command: "pnpm dev",
+        url: baseURL,
+        reuseExistingServer: !process.env.CI,
+        timeout: 120_000,
+      }
+    : undefined,
 });
