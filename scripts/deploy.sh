@@ -34,5 +34,21 @@ unset NEXT_PUBLIC_SUPABASE_URL
 unset NEXT_PUBLIC_SUPABASE_ANON_KEY
 unset NEXT_PUBLIC_SITE_URL
 
+# Block .env.local from polluting the build. Next.js loads .env.local in
+# EVERY mode except test (yes, including production) and it overrides
+# .env.production. Localhost-pointing NEXT_PUBLIC_* values there get
+# inlined into the prod bundle — we hit this once: Google OAuth bounced
+# to http://localhost:3000 because .env.local had NEXT_PUBLIC_SITE_URL
+# pointing at dev. Keep dev creds in .env.development.local instead;
+# that file is only loaded when NODE_ENV=development.
+if [[ -f .env.local ]] && grep -qE '^NEXT_PUBLIC_.+(localhost|127\.0\.0\.1|:54321|:3000)' .env.local; then
+  echo "ERROR: .env.local contains localhost-pointing NEXT_PUBLIC_* values." >&2
+  echo "       Move them to .env.development.local — .env.local is loaded" >&2
+  echo "       during the production build and will pollute the bundle." >&2
+  echo "       Offending lines:" >&2
+  grep -nE '^NEXT_PUBLIC_.+(localhost|127\.0\.0\.1|:54321|:3000)' .env.local >&2 || true
+  exit 1
+fi
+
 pnpm cf:build
 pnpm exec opennextjs-cloudflare deploy

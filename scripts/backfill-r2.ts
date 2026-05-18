@@ -12,7 +12,12 @@
  * Worker runtime.
  *
  * Usage:
- *   pnpm tsx scripts/backfill-r2.ts [--dry-run] [--limit=N] [--purge-supabase]
+ *   pnpm backfill-r2 --prod [--dry-run] [--limit=N] [--purge-supabase]
+ *
+ * --prod swaps the env-file load order so .env.production wins for the
+ * Supabase URL + service-role key. Without it the script targets local
+ * Supabase (54321) — useful for testing the script but not for the
+ * actual migration.
  *
  * Resumable: state lives in `scripts/backfill-r2.state.json` and records
  * the last `created_at` cursor + per-row outcomes. Rerun after a crash
@@ -57,6 +62,8 @@ type Args = {
   dryRun: boolean;
   limit: number | null;
   purgeSupabase: boolean;
+  /** When true, .env.production wins over .env.local for Supabase creds. */
+  prod: boolean;
 };
 
 function parseArgs(): Args {
@@ -72,6 +79,7 @@ function parseArgs(): Args {
     dryRun: args.includes("--dry-run"),
     limit,
     purgeSupabase: args.includes("--purge-supabase"),
+    prod: args.includes("--prod"),
   };
 }
 
@@ -108,9 +116,21 @@ function saveState(s: State): void {
 // Env + clients
 // ---------------------------------------------------------------------------
 
-function loadEnvFiles(): void {
-  loadEnv({ path: resolve(process.cwd(), ".env.local") });
-  loadEnv({ path: resolve(process.cwd(), ".env.production") });
+function loadEnvFiles(prod: boolean): void {
+  // Load order matters: dotenv skips vars that are already set, so the
+  // FIRST file wins. `--prod` flips the order so .env.production wins
+  // for NEXT_PUBLIC_SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY (and
+  // anything else only the prod env has). R2 creds typically live in
+  // both files; either source is fine.
+  const localPath = resolve(process.cwd(), ".env.local");
+  const prodPath = resolve(process.cwd(), ".env.production");
+  if (prod) {
+    loadEnv({ path: prodPath });
+    loadEnv({ path: localPath });
+  } else {
+    loadEnv({ path: localPath });
+    loadEnv({ path: prodPath });
+  }
 }
 
 function requireEnv(name: string): string {
@@ -464,8 +484,10 @@ async function runPurge(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 async function main() {
-  loadEnvFiles();
   const args = parseArgs();
+  loadEnvFiles(args.prod);
+  const target = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "(unset)";
+  console.log(`Target Supabase: ${target} (${args.prod ? "--prod" : "local-default"})`);
   if (args.purgeSupabase) {
     await runPurge();
   } else {
