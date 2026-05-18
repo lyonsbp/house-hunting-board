@@ -73,19 +73,14 @@ const SINGLE_HOVER_SCALE = "1.08";
 export function CategoryTile({
   boardId,
   tile,
-  signedThumbUrls,
 }: {
   boardId: string;
   tile: CategoryTileData;
-  signedThumbUrls: Record<string, string>;
 }) {
   const slug =
     tile.id === UNCATEGORIZED_ID ? UNCATEGORIZED_ID : slugify(tile.name);
   const href = `/boards/${boardId}/c/${slug}`;
-  const usableThumbs = tile.thumbnailPaths
-    .map((path) => signedThumbUrls[path])
-    .filter((url): url is string => !!url)
-    .slice(0, 4);
+  const usableThumbs = tile.thumbnailUrls.slice(0, 4);
   const isEmpty = tile.count === 0;
   const hasThumbs = usableThumbs.length > 0;
 
@@ -119,7 +114,7 @@ export function CategoryTile({
             const restList = REST_BY_COUNT[count] ?? REST_BY_COUNT[4];
             const fanList = FAN_BY_COUNT[count] ?? FAN_BY_COUNT[4];
             const fanScale = count === 1 ? SINGLE_HOVER_SCALE : "1";
-            return usableThumbs.map((url, i) => {
+            return usableThumbs.map((url: string, i: number) => {
               const rest = restList[i] ?? restList[restList.length - 1];
               const fan = fanList[i] ?? fanList[fanList.length - 1];
               return (

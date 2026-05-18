@@ -1,5 +1,6 @@
 import { getCurrentUser } from "@/lib/auth";
 import { toArtifact, type Artifact, type ArtifactRow } from "@/lib/artifacts";
+import { storage } from "@/lib/storage";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -80,8 +81,8 @@ export type CategoryTile = {
   id: string;
   name: string;
   count: number;
-  /** Up to 4 image storage paths to render as overlapped thumbs. */
-  thumbnailPaths: string[];
+  /** Up to 4 pre-resolved thumbnail URLs to render as overlapped thumbs. */
+  thumbnailUrls: string[];
 };
 
 export type DashboardSummary = {
@@ -113,7 +114,7 @@ export async function loadDashboardSummary(
       .order("name"),
     supabase
       .from("artifacts")
-      .select("id, kind, storage_path, created_at")
+      .select("id, kind, storage_path, storage_backend, metadata, created_at")
       .eq("board_id", boardId)
       .order("created_at", { ascending: false }),
     supabase
@@ -128,6 +129,8 @@ export async function loadDashboardSummary(
     id: string;
     kind: string;
     storagePath: string | null;
+    storageBackend: "supabase" | "r2";
+    metadata: Record<string, unknown> | null;
     createdAt: string;
   };
   const byArtifact = new Map<string, ArtifactInfo>();
@@ -136,6 +139,8 @@ export async function loadDashboardSummary(
       id: a.id,
       kind: a.kind,
       storagePath: a.storage_path,
+      storageBackend: a.storage_backend === "r2" ? "r2" : "supabase",
+      metadata: a.metadata,
       createdAt: a.created_at,
     });
   }
@@ -152,44 +157,80 @@ export async function loadDashboardSummary(
     (memberships ?? []).map((m) => m.artifact_id),
   );
 
-  function pickThumbnails(orderedArtifactIds: string[]): string[] {
-    const paths: string[] = [];
+  function pickThumbnailArtifacts(orderedArtifactIds: string[]): ArtifactInfo[] {
+    const picked: ArtifactInfo[] = [];
     for (const id of orderedArtifactIds) {
-      if (paths.length >= 4) break;
+      if (picked.length >= 4) break;
       const info = byArtifact.get(id);
-      if (!info || info.kind !== "image" || !info.storagePath) continue;
-      paths.push(info.storagePath);
+      if (!info || info.kind !== "image") continue;
+      // Skip R2 rows missing the thumb variant key, and legacy rows
+      // missing a storage_path — both can't yield a URL.
+      const hasR2Thumb =
+        info.storageBackend === "r2" &&
+        Boolean(
+          (info.metadata as { variants?: { thumb?: { key?: string } } } | null)
+            ?.variants?.thumb?.key,
+        );
+      const hasLegacyPath =
+        info.storageBackend === "supabase" && Boolean(info.storagePath);
+      if (hasR2Thumb || hasLegacyPath) picked.push(info);
     }
-    return paths;
+    return picked;
   }
 
-  const tiles: CategoryTile[] = [];
+  // Collect every tile's thumbnails into one flat list so we can do a
+  // single resolveImageUrls call (one Supabase round-trip total instead
+  // of N).
+  type TileThumbInfo = { tileIndex: number; artifact: ArtifactInfo };
+  const allThumbInfos: TileThumbInfo[] = [];
+  const tileMeta: { id: string; name: string; count: number }[] = [];
 
   for (const c of categories ?? []) {
     const ms = (byCat.get(c.id) ?? [])
       .slice()
       .sort((a, b) => a.sortOrder - b.sortOrder);
     const artifactIds = ms.map((m) => m.artifactId);
-    tiles.push({
-      id: c.id,
-      name: c.name,
-      count: artifactIds.length,
-      thumbnailPaths: pickThumbnails(artifactIds),
-    });
+    const idx = tileMeta.length;
+    tileMeta.push({ id: c.id, name: c.name, count: artifactIds.length });
+    for (const info of pickThumbnailArtifacts(artifactIds)) {
+      allThumbInfos.push({ tileIndex: idx, artifact: info });
+    }
   }
 
-  // Uncategorized = board artifacts with no membership. Already sorted
-  // by created_at desc from the artifacts query.
   const uncatIds = (artifacts ?? [])
     .filter((a) => !categorizedIds.has(a.id))
     .map((a) => a.id);
   if (uncatIds.length > 0) {
-    tiles.push({
+    const idx = tileMeta.length;
+    tileMeta.push({
       id: UNCATEGORIZED_ID,
       name: "Uncategorized",
       count: uncatIds.length,
-      thumbnailPaths: pickThumbnails(uncatIds),
     });
+    for (const info of pickThumbnailArtifacts(uncatIds)) {
+      allThumbInfos.push({ tileIndex: idx, artifact: info });
+    }
+  }
+
+  const urlMap = await resolveImageUrls(
+    allThumbInfos.map((t) => ({
+      id: t.artifact.id,
+      storageBackend: t.artifact.storageBackend,
+      storagePath: t.artifact.storagePath ?? undefined,
+      metadata: t.artifact.metadata,
+    })),
+    "thumb",
+  );
+
+  const tiles: CategoryTile[] = tileMeta.map((m) => ({
+    id: m.id,
+    name: m.name,
+    count: m.count,
+    thumbnailUrls: [],
+  }));
+  for (const t of allThumbInfos) {
+    const url = urlMap.get(t.artifact.id);
+    if (url) tiles[t.tileIndex]!.thumbnailUrls.push(url);
   }
 
   return { tiles };
@@ -223,11 +264,6 @@ export type CategoryDrillDown = {
   allTags: { id: string; name: string }[];
   allCategories: { id: string; name: string }[];
   provenanceByArtifact: Record<string, ArtifactProvenance>;
-  /** Transformed signed URLs sized for the grid (~720px wide). */
-  signedImageUrls: Record<string, string>;
-  /** Larger signed URLs for the lightbox zoom; un-transformed so the
-   *  Smart CDN serves the original bytes when the user clicks in. */
-  signedZoomUrls: Record<string, string>;
 };
 
 /**
@@ -304,8 +340,6 @@ export async function loadCategoryDrillDown(
       allTags: [],
       allCategories: allCategories ?? [],
       provenanceByArtifact: {},
-      signedImageUrls: {},
-      signedZoomUrls: {},
     };
   }
 
@@ -322,7 +356,7 @@ export async function loadCategoryDrillDown(
     supabase
       .from("artifacts")
       .select(
-        "id, board_id, kind, storage_path, url, body, metadata, created_at",
+        "id, board_id, kind, storage_path, storage_backend, url, body, metadata, created_at",
       )
       .in("id", scopedArtifactIds),
     supabase
@@ -406,19 +440,28 @@ export async function loadCategoryDrillDown(
     };
   }
 
-  const imagePaths: string[] = [];
-  for (const a of artifacts) {
-    if (a.kind === "image" && a.storagePath) imagePaths.push(a.storagePath);
+  // Resolve thumb/display URLs once per board view and stamp them onto
+  // each image artifact. R2 rows get pure string-concat URLs; legacy
+  // rows fall back to short-lived signed URLs (one Supabase round-trip).
+  const imageArts = artifacts.filter(
+    (a): a is Extract<Artifact, { kind: "image" }> => a.kind === "image",
+  );
+  if (imageArts.length > 0) {
+    const lookupShape = imageArts.map((a) => ({
+      id: a.id,
+      storageBackend: a.storageBackend,
+      storagePath: a.storagePath || undefined,
+      metadata: rowById.get(a.id)?.metadata ?? null,
+    }));
+    const [thumbUrls, displayUrls] = await Promise.all([
+      resolveImageUrls(lookupShape, "thumb"),
+      resolveImageUrls(lookupShape, "display"),
+    ]);
+    for (const a of imageArts) {
+      a.thumbUrl = thumbUrls.get(a.id);
+      a.displayUrl = displayUrls.get(a.id);
+    }
   }
-  const [signedImageUrls, signedZoomUrls] = await Promise.all([
-    // Grid + canvas variant: width=720 covers a 360px CSS card at 2x DPR
-    // with headroom. quality=75 + Supabase's auto-WebP cuts payloads by
-    // ~5-10x vs. originals. Billing is per origin image, so requesting
-    // a second variant of the same source costs nothing extra.
-    signImagePaths(imagePaths, { width: 720, quality: 75 }),
-    // Zoom variant: un-transformed so the lightbox shows source pixels.
-    signImagePaths(imagePaths),
-  ]);
 
   return {
     category,
@@ -428,8 +471,6 @@ export async function loadCategoryDrillDown(
     allTags: tagRows ?? [],
     allCategories: allCategoriesData ?? [],
     provenanceByArtifact,
-    signedImageUrls,
-    signedZoomUrls,
   };
 }
 
@@ -553,6 +594,58 @@ function transformsEnabled(): boolean {
   if (!raw) return false;
   const v = raw.toLowerCase();
   return v === "1" || v === "true" || v === "yes" || v === "on";
+}
+
+/**
+ * Backend-aware URL resolver. Each artifact returns a URL for the
+ * requested variant ('thumb' or 'display'), regardless of which backend
+ * holds its bytes. R2 rows resolve to immutable content-hashed public
+ * URLs (pure string concat — no network). Legacy Supabase rows fall
+ * back to short-lived signed URLs via `signImagePaths`.
+ *
+ * Returns a Map keyed by artifact id. Image-artifacts without resolvable
+ * URLs (corrupt row, missing variant metadata) are simply absent — the
+ * consumer should handle null URLs gracefully.
+ */
+export async function resolveImageUrls(
+  imageArtifacts: ReadonlyArray<{
+    id: string;
+    storageBackend: "supabase" | "r2";
+    storagePath?: string;
+    metadata?: Record<string, unknown> | null;
+  }>,
+  variant: "thumb" | "display",
+): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const legacy: { id: string; path: string }[] = [];
+
+  for (const a of imageArtifacts) {
+    if (a.storageBackend === "r2") {
+      const variants = (a.metadata as { variants?: Record<string, { key?: string }> } | undefined)?.variants;
+      const v = variant === "thumb" ? variants?.thumb : variants?.display;
+      if (v?.key) out.set(a.id, storage.publicUrl(v.key));
+    } else if (a.storagePath) {
+      legacy.push({ id: a.id, path: a.storagePath });
+    }
+  }
+
+  if (legacy.length > 0) {
+    // Mirror the old grid/zoom sizes: thumb variant gets 720px-wide
+    // transform (covers a 360px CSS card at 2x DPR); display variant
+    // is un-transformed so the lightbox shows source pixels.
+    const transform =
+      variant === "thumb" ? { width: 720, quality: 75 } : undefined;
+    const signed = await signImagePaths(
+      legacy.map((x) => x.path),
+      transform,
+    );
+    for (const { id, path } of legacy) {
+      const url = signed[path];
+      if (url) out.set(id, url);
+    }
+  }
+
+  return out;
 }
 
 export async function signImagePaths(

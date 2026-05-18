@@ -4,7 +4,7 @@ import { useActionState, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Button } from "@heroui/react";
 
-import { prepareImageForUpload } from "@/lib/image-prep";
+import { encodeVariants } from "@/lib/image-encode";
 
 import {
   createImageArtifact,
@@ -198,6 +198,9 @@ function ImageForm({
   const widthRef = useRef<HTMLInputElement>(null);
   const heightRef = useRef<HTMLInputElement>(null);
   const lqipRef = useRef<HTMLInputElement>(null);
+  const encodedRef = useRef<Awaited<ReturnType<typeof encodeVariants>> | null>(
+    null,
+  );
 
   // Reset the form after each successful submit so the user can add
   // another image without manually clearing the file input. Distinct
@@ -206,35 +209,51 @@ function ImageForm({
   useEffect(() => {
     if ((state.status === "idle" || state.status === "success") && !pending) {
       formRef.current?.reset();
+      encodedRef.current = null;
     }
   }, [state, pending]);
 
-  // Measure dims + render an LQIP in the browser as soon as the user
-  // picks a file, and stash the values in hidden inputs so the server
-  // action gets them alongside the upload. Failing this step is
-  // non-fatal — the action will fall back to parsing dims server-side.
+  // Encode thumb/display variants and stash dims + LQIP in hidden inputs
+  // as soon as the user picks a file. The variant blobs ride along on
+  // submit via a custom onSubmit handler (hidden inputs can't carry
+  // Blobs). Failing this step is non-fatal — the server falls back to
+  // single-file legacy Supabase upload + header parse for dims.
   async function onFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.currentTarget.files?.[0];
     if (widthRef.current) widthRef.current.value = "";
     if (heightRef.current) heightRef.current.value = "";
     if (lqipRef.current) lqipRef.current.value = "";
+    encodedRef.current = null;
     if (!file) return;
-    const prepared = await prepareImageForUpload(file).catch(() => null);
-    if (!prepared) return;
-    if (widthRef.current && prepared.width) {
-      widthRef.current.value = String(prepared.width);
-    }
-    if (heightRef.current && prepared.height) {
-      heightRef.current.value = String(prepared.height);
-    }
-    if (lqipRef.current && prepared.lqip) {
-      lqipRef.current.value = prepared.lqip;
-    }
+    const encoded = await encodeVariants(file).catch(() => null);
+    if (!encoded) return;
+    encodedRef.current = encoded;
+    if (widthRef.current) widthRef.current.value = String(encoded.width);
+    if (heightRef.current) heightRef.current.value = String(encoded.height);
+    if (lqipRef.current && encoded.lqip) lqipRef.current.value = encoded.lqip;
+  }
+
+  function onSubmit(e: React.FormEvent<HTMLFormElement>) {
+    const enc = encodedRef.current;
+    if (!enc) return; // fall through to native form action with original `file`
+    e.preventDefault();
+    const fd = new FormData(e.currentTarget);
+    fd.append("contentHash", enc.contentHash);
+    fd.append("thumb", enc.thumb.blob, `thumb.${enc.thumb.ext}`);
+    fd.append("thumbExt", enc.thumb.ext);
+    fd.append("display", enc.display.blob, `display.${enc.display.ext}`);
+    fd.append("displayExt", enc.display.ext);
+    action(fd);
   }
 
   return (
     <>
-      <form ref={formRef} action={action} className="flex flex-col gap-3">
+      <form
+        ref={formRef}
+        action={action}
+        onSubmit={onSubmit}
+        className="flex flex-col gap-3"
+      >
         <input type="hidden" name="boardId" value={boardId} />
         <input type="hidden" name="width" ref={widthRef} />
         <input type="hidden" name="height" ref={heightRef} />

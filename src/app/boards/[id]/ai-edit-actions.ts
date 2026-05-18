@@ -35,7 +35,15 @@ function pickModel(raw: FormDataEntryValue | null): ImageEditModel {
   return found ? (raw as ImageEditModel) : DEFAULT_MODEL;
 }
 import { getCurrentUser } from "@/lib/auth";
+import { encodeServerVariants } from "@/lib/image-encode-server";
 import { readImageDimensions } from "@/lib/image-meta";
+import {
+  type ImageExt,
+  type Variant,
+  buildKey,
+  r2WritesEnabled,
+  storage,
+} from "@/lib/storage";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -146,7 +154,7 @@ export async function editImageArtifact(
   // Fetch the parent artifact + verify it's an image on this board.
   const { data: parent, error: parentError } = await supabase
     .from("artifacts")
-    .select("id, board_id, kind, storage_path")
+    .select("id, board_id, kind, storage_path, storage_backend, metadata")
     .eq("id", artifactId)
     .maybeSingle();
   if (parentError || !parent) {
@@ -163,7 +171,7 @@ export async function editImageArtifact(
       message: "Artifact does not belong to this board.",
     };
   }
-  if (parent.kind !== "image" || !parent.storage_path) {
+  if (parent.kind !== "image" || !hasArtifactBytes(parent)) {
     return {
       status: "error",
       code: "wrong-kind",
@@ -204,19 +212,13 @@ export async function editImageArtifact(
     remaining = limit - used - 1;
   }
 
-  // Download the source image bytes from Storage.
-  const { data: sourceBlob, error: dlError } = await supabase.storage
-    .from("artifacts")
-    .download(parent.storage_path);
-  if (dlError || !sourceBlob) {
-    return {
-      status: "error",
-      code: "storage",
-      message: dlError?.message ?? "Couldn't read source image.",
-    };
+  // Download the source image bytes from whichever backend owns them.
+  const loaded = await loadArtifactBytes(supabase, parent);
+  if ("error" in loaded) {
+    return { status: "error", code: "storage", message: loaded.error };
   }
-  const sourceBytes = new Uint8Array(await sourceBlob.arrayBuffer());
-  const sourceMime = sourceBlob.type || "image/jpeg";
+  const sourceBytes = loaded.bytes;
+  const sourceMime = loaded.mime;
 
   // Resolve reference images (RLS gates artifact reads + upload-prefix
   // ownership). Done before the pending insert so quota isn't burned on
@@ -293,32 +295,85 @@ export async function editImageArtifact(
     return { status: "error", code: "model", message };
   }
 
-  const ext = OUTPUT_EXT_BY_MIME[outputMime.toLowerCase()] ?? "png";
-  const outputPath = `boards/${boardId}/${crypto.randomUUID()}.${ext}`;
+  const legacyExt = OUTPUT_EXT_BY_MIME[outputMime.toLowerCase()] ?? "png";
 
-  const { error: uploadError } = await supabase.storage
-    .from("artifacts")
-    .upload(outputPath, outputBytes, {
-      contentType: outputMime,
-      upsert: false,
-    });
-  if (uploadError) {
-    await supabase
-      .from("ai_edits")
-      .update({ status: "failed", error: uploadError.message })
-      .eq("id", editId);
-    return { status: "error", code: "storage", message: uploadError.message };
-  }
+  let insertPayload: {
+    storage_path: string | null;
+    storage_backend: "supabase" | "r2";
+    content_hash: string | null;
+    metadata: Record<string, unknown>;
+  };
+  let previewUrl: string | null = null;
+  let cleanupLegacyPath: string | null = null;
+  let cleanupR2Keys: string[] = [];
 
-  const outputDims = readImageDimensions(outputBytes, outputMime);
-
-  const { data: childArtifact, error: childError } = await supabase
-    .from("artifacts")
-    .insert({
-      board_id: boardId,
-      kind: "image",
+  if (r2WritesEnabled()) {
+    let encoded;
+    try {
+      encoded = await encodeServerVariants({
+        bytes: outputBytes,
+        sourceMime: outputMime,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "resize failed";
+      await supabase
+        .from("ai_edits")
+        .update({ status: "failed", error: msg })
+        .eq("id", editId);
+      return { status: "error", code: "storage", message: msg };
+    }
+    try {
+      const uploaded = await uploadAiVariantsDeduped({
+        contentHash: encoded.contentHash,
+        thumb: encoded.thumb,
+        display: encoded.display,
+        original: encoded.original,
+      });
+      cleanupR2Keys = uploaded.uploadedKeys;
+      insertPayload = {
+        storage_path: null,
+        storage_backend: "r2",
+        content_hash: encoded.contentHash,
+        metadata: {
+          ai_edit_of: parent.id,
+          prompt,
+          model,
+          width: encoded.width,
+          height: encoded.height,
+          variants: uploaded.variants,
+          ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
+        },
+      };
+      previewUrl = storage.publicUrl(uploaded.variants.display.key);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "R2 upload failed";
+      await supabase
+        .from("ai_edits")
+        .update({ status: "failed", error: msg })
+        .eq("id", editId);
+      return { status: "error", code: "storage", message: msg };
+    }
+  } else {
+    const outputPath = `boards/${boardId}/${crypto.randomUUID()}.${legacyExt}`;
+    const { error: uploadError } = await supabase.storage
+      .from("artifacts")
+      .upload(outputPath, outputBytes, {
+        contentType: outputMime,
+        upsert: false,
+      });
+    if (uploadError) {
+      await supabase
+        .from("ai_edits")
+        .update({ status: "failed", error: uploadError.message })
+        .eq("id", editId);
+      return { status: "error", code: "storage", message: uploadError.message };
+    }
+    cleanupLegacyPath = outputPath;
+    const outputDims = readImageDimensions(outputBytes, outputMime);
+    insertPayload = {
       storage_path: outputPath,
-      body: prompt,
+      storage_backend: "supabase",
+      content_hash: null,
       metadata: {
         ai_edit_of: parent.id,
         prompt,
@@ -328,11 +383,29 @@ export async function editImageArtifact(
           : {}),
         ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
       },
+    };
+  }
+
+  const { data: childArtifact, error: childError } = await supabase
+    .from("artifacts")
+    .insert({
+      board_id: boardId,
+      kind: "image",
+      storage_path: insertPayload.storage_path,
+      storage_backend: insertPayload.storage_backend,
+      content_hash: insertPayload.content_hash,
+      body: prompt,
+      metadata: insertPayload.metadata,
     })
     .select("id")
     .single();
   if (childError || !childArtifact) {
-    await supabase.storage.from("artifacts").remove([outputPath]);
+    if (cleanupLegacyPath) {
+      await supabase.storage.from("artifacts").remove([cleanupLegacyPath]);
+    }
+    if (cleanupR2Keys.length > 0) {
+      await storage.remove(cleanupR2Keys).catch(() => undefined);
+    }
     await supabase
       .from("ai_edits")
       .update({ status: "failed", error: childError?.message ?? "insert failed" })
@@ -359,13 +432,16 @@ export async function editImageArtifact(
     })
     .eq("id", editId);
 
-  // Sign a one-hour URL for the review dialog so the client can show the
-  // result without waiting for the next page-render to refresh signed URLs.
-  let signedUrl: string | null = null;
-  const { data: signed } = await supabase.storage
-    .from("artifacts")
-    .createSignedUrl(outputPath, 3600);
-  if (signed?.signedUrl) signedUrl = signed.signedUrl;
+  // Preview URL for the review dialog. R2 rows reuse the immutable
+  // display variant URL we already have. Legacy rows sign a one-hour
+  // URL for the same UX as today.
+  let signedUrl: string | null = previewUrl;
+  if (!signedUrl && insertPayload.storage_path) {
+    const { data: signed } = await supabase.storage
+      .from("artifacts")
+      .createSignedUrl(insertPayload.storage_path, 3600);
+    if (signed?.signedUrl) signedUrl = signed.signedUrl;
+  }
 
   revalidatePath(`/boards/${boardId}`);
   return {
@@ -604,7 +680,7 @@ export async function remixImageArtifact(
 
   const { data: parent } = await supabase
     .from("artifacts")
-    .select("id, board_id, kind, storage_path")
+    .select("id, board_id, kind, storage_path, storage_backend, metadata")
     .eq("id", artifactId)
     .maybeSingle();
   if (!parent) {
@@ -617,7 +693,7 @@ export async function remixImageArtifact(
       message: "Artifact does not belong to this board.",
     };
   }
-  if (parent.kind !== "image" || !parent.storage_path) {
+  if (parent.kind !== "image" || !hasArtifactBytes(parent)) {
     return {
       status: "error",
       code: "wrong-kind",
@@ -658,18 +734,12 @@ export async function remixImageArtifact(
   }
 
   // Download the source once, share across all parallel calls.
-  const { data: sourceBlob, error: dlError } = await supabase.storage
-    .from("artifacts")
-    .download(parent.storage_path);
-  if (dlError || !sourceBlob) {
-    return {
-      status: "error",
-      code: "storage",
-      message: dlError?.message ?? "Couldn't read source image.",
-    };
+  const loaded = await loadArtifactBytes(supabase, parent);
+  if ("error" in loaded) {
+    return { status: "error", code: "storage", message: loaded.error };
   }
-  const sourceBytes = new Uint8Array(await sourceBlob.arrayBuffer());
-  const sourceMime = sourceBlob.type || "image/jpeg";
+  const sourceBytes = loaded.bytes;
+  const sourceMime = loaded.mime;
 
   // Resolve reference images once for the whole batch.
   let referenceImages: Awaited<ReturnType<typeof resolveReferences>> = [];
@@ -771,8 +841,7 @@ export async function remixImageArtifact(
   for (const result of modelResults) {
     const editId = editIdByVariant.get(result.variantIndex);
     if (!editId) continue;
-    const ext = OUTPUT_EXT_BY_MIME[result.image.mimeType.toLowerCase()] ?? "png";
-    const outputPath = `boards/${boardId}/${crypto.randomUUID()}.${ext}`;
+    const legacyExt = OUTPUT_EXT_BY_MIME[result.image.mimeType.toLowerCase()] ?? "png";
 
     if (result.image.bytes.length > MAX_OUTPUT_BYTES) {
       await supabase
@@ -782,18 +851,94 @@ export async function remixImageArtifact(
       continue;
     }
 
-    const { error: uploadError } = await supabase.storage
-      .from("artifacts")
-      .upload(outputPath, result.image.bytes, {
-        contentType: result.image.mimeType,
-        upsert: false,
-      });
-    if (uploadError) {
-      await supabase
-        .from("ai_edits")
-        .update({ status: "failed", error: uploadError.message })
-        .eq("id", editId);
-      continue;
+    let insertPayload: {
+      storage_path: string | null;
+      storage_backend: "supabase" | "r2";
+      content_hash: string | null;
+      metadata: Record<string, unknown>;
+    };
+    let previewUrl: string | null = null;
+    let cleanupLegacyPath: string | null = null;
+    let cleanupR2Keys: string[] = [];
+
+    const baseMetadata = {
+      ai_edit_of: parent.id,
+      prompt,
+      model,
+      variant_index: result.variantIndex,
+      remix_size: variants,
+      ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
+    };
+
+    if (r2WritesEnabled()) {
+      let encoded;
+      try {
+        encoded = await encodeServerVariants({
+          bytes: result.image.bytes,
+          sourceMime: result.image.mimeType,
+        });
+      } catch (e) {
+        await supabase
+          .from("ai_edits")
+          .update({
+            status: "failed",
+            error: e instanceof Error ? e.message : "resize failed",
+          })
+          .eq("id", editId);
+        continue;
+      }
+      try {
+        const uploaded = await uploadAiVariantsDeduped({
+          contentHash: encoded.contentHash,
+          thumb: encoded.thumb,
+          display: encoded.display,
+          original: encoded.original,
+        });
+        cleanupR2Keys = uploaded.uploadedKeys;
+        insertPayload = {
+          storage_path: null,
+          storage_backend: "r2",
+          content_hash: encoded.contentHash,
+          metadata: {
+            ...baseMetadata,
+            width: encoded.width,
+            height: encoded.height,
+            variants: uploaded.variants,
+          },
+        };
+        previewUrl = storage.publicUrl(uploaded.variants.display.key);
+      } catch (e) {
+        await supabase
+          .from("ai_edits")
+          .update({
+            status: "failed",
+            error: e instanceof Error ? e.message : "R2 upload failed",
+          })
+          .eq("id", editId);
+        continue;
+      }
+    } else {
+      const outputPath = `boards/${boardId}/${crypto.randomUUID()}.${legacyExt}`;
+      const { error: uploadError } = await supabase.storage
+        .from("artifacts")
+        .upload(outputPath, result.image.bytes, {
+          contentType: result.image.mimeType,
+          upsert: false,
+        });
+      if (uploadError) {
+        await supabase
+          .from("ai_edits")
+          .update({ status: "failed", error: uploadError.message })
+          .eq("id", editId);
+        continue;
+      }
+      cleanupLegacyPath = outputPath;
+      insertPayload = {
+        storage_path: outputPath,
+        storage_backend: "supabase",
+        content_hash: null,
+        metadata: baseMetadata,
+      };
     }
 
     const { data: childArtifact, error: childError } = await supabase
@@ -801,21 +946,21 @@ export async function remixImageArtifact(
       .insert({
         board_id: boardId,
         kind: "image",
-        storage_path: outputPath,
+        storage_path: insertPayload.storage_path,
+        storage_backend: insertPayload.storage_backend,
+        content_hash: insertPayload.content_hash,
         body: prompt,
-        metadata: {
-          ai_edit_of: parent.id,
-          prompt,
-          model,
-          variant_index: result.variantIndex,
-          remix_size: variants,
-          ...(refMetadata.length > 0 ? { refs: refMetadata } : {}),
-        },
+        metadata: insertPayload.metadata,
       })
       .select("id")
       .single();
     if (childError || !childArtifact) {
-      await supabase.storage.from("artifacts").remove([outputPath]);
+      if (cleanupLegacyPath) {
+        await supabase.storage.from("artifacts").remove([cleanupLegacyPath]);
+      }
+      if (cleanupR2Keys.length > 0) {
+        await storage.remove(cleanupR2Keys).catch(() => undefined);
+      }
       await supabase
         .from("ai_edits")
         .update({
@@ -845,11 +990,13 @@ export async function remixImageArtifact(
       })
       .eq("id", editId);
 
-    let signedUrl: string | null = null;
-    const { data: signed } = await admin.storage
-      .from("artifacts")
-      .createSignedUrl(outputPath, 3600);
-    if (signed?.signedUrl) signedUrl = signed.signedUrl;
+    let signedUrl: string | null = previewUrl;
+    if (!signedUrl && insertPayload.storage_path) {
+      const { data: signed } = await admin.storage
+        .from("artifacts")
+        .createSignedUrl(insertPayload.storage_path, 3600);
+      if (signed?.signedUrl) signedUrl = signed.signedUrl;
+    }
 
     variantOutputs.push({
       outputArtifactId: childId,
@@ -963,4 +1110,101 @@ export async function keepRemixSelections(input: {
     kept: keepArtifactIds.length,
     discarded: discardArtifactIds.length,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Backend-aware artifact byte loader (shared by edit + remix input paths)
+// ---------------------------------------------------------------------------
+
+type ArtifactByteRow = {
+  storage_backend: string | null;
+  storage_path: string | null;
+  metadata: unknown;
+};
+
+function hasArtifactBytes(row: ArtifactByteRow): boolean {
+  if ((row.storage_backend ?? "supabase") === "r2") {
+    const variants = (row.metadata as { variants?: Record<string, { key?: string }> } | null)?.variants;
+    return Boolean(variants?.original?.key);
+  }
+  return Boolean(row.storage_path);
+}
+
+async function loadArtifactBytes(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  row: ArtifactByteRow,
+): Promise<{ bytes: Uint8Array; mime: string } | { error: string }> {
+  const backend = row.storage_backend ?? "supabase";
+  if (backend === "r2") {
+    const variants = (row.metadata as { variants?: Record<string, { key?: string; ext?: string }> } | null)?.variants;
+    const orig = variants?.original;
+    if (!orig?.key) return { error: "R2 artifact has no original variant key." };
+    const obj = await storage.get(orig.key);
+    if (!obj) return { error: "Source image is missing in R2." };
+    return {
+      bytes: new Uint8Array(obj.bytes),
+      mime: obj.contentType || mimeFromExt(orig.ext),
+    };
+  }
+  if (!row.storage_path) {
+    return { error: "Artifact has no storage path." };
+  }
+  const { data, error } = await supabase.storage
+    .from("artifacts")
+    .download(row.storage_path);
+  if (error || !data) {
+    return { error: error?.message ?? "Couldn't read source image." };
+  }
+  return {
+    bytes: new Uint8Array(await data.arrayBuffer()),
+    mime: data.type || "image/jpeg",
+  };
+}
+
+function mimeFromExt(ext: string | undefined): string {
+  switch ((ext ?? "").toLowerCase()) {
+    case "avif":
+      return "image/avif";
+    case "webp":
+      return "image/webp";
+    case "png":
+      return "image/png";
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    default:
+      return "application/octet-stream";
+  }
+}
+
+// ---------------------------------------------------------------------------
+// R2 variant upload helper (shared by edit + remix output paths)
+// ---------------------------------------------------------------------------
+
+type VariantUploadInput = { blob: Blob; ext: ImageExt };
+
+async function uploadAiVariantsDeduped(input: {
+  contentHash: string;
+  thumb: VariantUploadInput;
+  display: VariantUploadInput;
+  original: VariantUploadInput;
+}): Promise<{
+  variants: Record<Variant, { key: string; ext: ImageExt }>;
+  uploadedKeys: string[];
+}> {
+  const uploaded: string[] = [];
+  const put = async (v: Variant, vi: VariantUploadInput) => {
+    if (await storage.has(input.contentHash, v, vi.ext)) {
+      return { key: buildKey(input.contentHash, v, vi.ext), ext: vi.ext };
+    }
+    const ref = await storage.putOne(input.contentHash, v, vi.blob, vi.ext);
+    uploaded.push(ref.key);
+    return ref;
+  };
+  const [thumb, display, original] = await Promise.all([
+    put("thumb", input.thumb),
+    put("display", input.display),
+    put("original", input.original),
+  ]);
+  return { variants: { thumb, display, original }, uploadedKeys: uploaded };
 }

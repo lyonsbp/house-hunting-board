@@ -73,8 +73,8 @@ type PanelKind = null | "categorize" | "tags" | "comments" | "ai-edit";
 export function ArtifactCard({
   artifact,
   boardId,
-  signedImageUrl,
-  signedZoomUrl,
+  thumbUrl,
+  displayUrl,
   categories,
   memberCategoryIds,
   tags,
@@ -86,10 +86,10 @@ export function ArtifactCard({
 }: {
   artifact: Artifact;
   boardId: string;
-  signedImageUrl?: string;
+  thumbUrl?: string;
   /** Larger / un-transformed variant for the lightbox. Falls back to
-   *  signedImageUrl when omitted. */
-  signedZoomUrl?: string;
+   *  thumbUrl when omitted. */
+  displayUrl?: string;
   categories: Category[];
   memberCategoryIds: string[];
   tags: Tag[];
@@ -162,8 +162,8 @@ export function ArtifactCard({
 
       <CardBody
         artifact={artifact}
-        signedImageUrl={signedImageUrl}
-        signedZoomUrl={signedZoomUrl}
+        thumbUrl={thumbUrl}
+        displayUrl={displayUrl}
         provenance={provenance}
       />
 
@@ -354,13 +354,13 @@ function TagsRow({ tags }: { tags: Tag[] }) {
 
 function CardBody({
   artifact,
-  signedImageUrl,
-  signedZoomUrl,
+  thumbUrl,
+  displayUrl,
   provenance,
 }: {
   artifact: Artifact;
-  signedImageUrl?: string;
-  signedZoomUrl?: string;
+  thumbUrl?: string;
+  displayUrl?: string;
   provenance?: Provenance;
 }) {
   switch (artifact.kind) {
@@ -368,8 +368,8 @@ function CardBody({
       return (
         <ImageBody
           artifact={artifact}
-          signedImageUrl={signedImageUrl}
-          signedZoomUrl={signedZoomUrl}
+          thumbUrl={thumbUrl}
+          displayUrl={displayUrl}
           provenance={provenance}
         />
       );
@@ -384,13 +384,13 @@ function CardBody({
 
 function ImageBody({
   artifact,
-  signedImageUrl,
-  signedZoomUrl,
+  thumbUrl,
+  displayUrl,
   provenance,
 }: {
   artifact: Extract<Artifact, { kind: "image" }>;
-  signedImageUrl?: string;
-  signedZoomUrl?: string;
+  thumbUrl?: string;
+  displayUrl?: string;
   provenance?: Provenance;
 }) {
   const provenanceLabel = provenance ? formatProvenance(provenance) : null;
@@ -400,10 +400,10 @@ function ImageBody({
     artifact.width && artifact.height
       ? artifact.width / artifact.height
       : undefined;
-  const zoomSrc = signedZoomUrl ?? signedImageUrl;
+  const zoomSrc = displayUrl ?? thumbUrl;
   return (
     <figure>
-      {signedImageUrl ? (
+      {thumbUrl ? (
         <button
           type="button"
           onClick={() => setZoomed(true)}
@@ -411,7 +411,7 @@ function ImageBody({
           className="relative block w-full cursor-zoom-in"
         >
           <ArtifactImage
-            src={signedImageUrl}
+            src={thumbUrl}
             alt={artifact.body || "Board image"}
             aspectRatio={aspectRatio}
             lqip={artifact.lqip}

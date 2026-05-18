@@ -56,3 +56,6 @@ cloudflare-env.d.ts
 next-env.d.ts
 
 scripts/favorites/*
+
+# One-shot migration state files (regenerated per run)
+scripts/backfill-r2.state.json

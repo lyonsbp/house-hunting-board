@@ -3,10 +3,7 @@ import { Card, CardContent } from "@heroui/react";
 
 import { metroForZip } from "@/lib/analytics/metros";
 import { getCurrentUser } from "@/lib/auth";
-import {
-  loadDashboardSummary,
-  signImagePaths,
-} from "@/lib/board-data";
+import { loadDashboardSummary } from "@/lib/board-data";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -268,19 +265,6 @@ export default async function BoardPage({
     }
   }
 
-  // Sign just the dashboard tile thumbnails — bounded by O(categories × 4)
-  // regardless of board size. Drill-down routes sign their own per-card URLs.
-  const thumbnailPaths = Array.from(
-    new Set(dashboardSummary.tiles.flatMap((t) => t.thumbnailPaths)),
-  );
-  // Dashboard tiles render thumbs in a small "fan deck" at ~140px CSS,
-  // so a single 320px-wide transform variant is plenty for 2x DPR.
-  const signedThumbUrls = await signImagePaths(thumbnailPaths, {
-    width: 320,
-    quality: 70,
-    resize: "cover",
-  });
-
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
       <header className="flex flex-col gap-1">
@@ -328,7 +312,6 @@ export default async function BoardPage({
         <DashboardGrid
           boardId={board.id}
           summary={dashboardSummary}
-          signedThumbUrls={signedThumbUrls}
           canEdit={canEdit}
         />
       </section>

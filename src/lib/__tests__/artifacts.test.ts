@@ -78,13 +78,30 @@ describe("toArtifact", () => {
       storage_path: "boards/aaa/uuid.png",
       body: null,
     });
-    expect(out).toEqual({
+    expect(out).toMatchObject({
       kind: "image",
       id: baseRow.id,
       boardId: baseRow.board_id,
       storagePath: "boards/aaa/uuid.png",
+      storageBackend: "supabase",
       body: undefined,
       createdAt: baseRow.created_at,
+    });
+  });
+
+  it("projects an R2-backed image row with storage_backend='r2'", () => {
+    const out = toArtifact({
+      ...baseRow,
+      kind: "image",
+      storage_path: null,
+      storage_backend: "r2",
+      body: null,
+      metadata: { variants: { thumb: { key: "v1/aa/abc/thumb.avif", ext: "avif" } } },
+    });
+    expect(out).toMatchObject({
+      kind: "image",
+      storagePath: "",
+      storageBackend: "r2",
     });
   });
 

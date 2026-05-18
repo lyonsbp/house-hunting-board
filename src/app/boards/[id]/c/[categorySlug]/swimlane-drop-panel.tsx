@@ -16,7 +16,7 @@ export type SwimlaneTile = {
   id: string;
   name: string;
   count: number;
-  thumbnailPaths: string[];
+  thumbnailUrls: string[];
 };
 
 /**
@@ -33,13 +33,11 @@ export type SwimlaneTile = {
 export function SwimlaneDropPanel({
   currentCategoryId,
   otherTiles,
-  signedThumbUrls,
   dragInProgress,
   canEdit,
 }: {
   currentCategoryId: string;
   otherTiles: SwimlaneTile[];
-  signedThumbUrls: Record<string, string>;
   dragInProgress: boolean;
   canEdit: boolean;
 }) {
@@ -73,11 +71,7 @@ export function SwimlaneDropPanel({
           ) : (
             <ul className="flex flex-col divide-y divide-stone-200 overflow-hidden rounded-lg border border-stone-200">
               {otherTiles.map((t) => (
-                <SwimlaneRow
-                  key={t.id}
-                  tile={t}
-                  signedThumbUrls={signedThumbUrls}
-                />
+                <SwimlaneRow key={t.id} tile={t} />
               ))}
               <NewCategoryRow />
               {showUnassign && <UnassignRow />}
@@ -89,13 +83,7 @@ export function SwimlaneDropPanel({
   );
 }
 
-function SwimlaneRow({
-  tile,
-  signedThumbUrls,
-}: {
-  tile: SwimlaneTile;
-  signedThumbUrls: Record<string, string>;
-}) {
+function SwimlaneRow({ tile }: { tile: SwimlaneTile }) {
   // Always register the droppable. The panel hides via translate-y-full
   // when no drag is in progress, so the chip is visually unreachable
   // anyway — and keeping the droppable always registered avoids a
@@ -104,10 +92,7 @@ function SwimlaneRow({
   const { setNodeRef, isOver } = useDroppable({
     id: `chip:assign:${tile.id}`,
   });
-  const thumbs = tile.thumbnailPaths
-    .map((p) => signedThumbUrls[p])
-    .filter((u): u is string => !!u)
-    .slice(0, 4);
+  const thumbs = tile.thumbnailUrls.slice(0, 4);
 
   return (
     <li

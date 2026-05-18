@@ -8,12 +8,10 @@ const SERIF =
 export function DashboardGrid({
   boardId,
   summary,
-  signedThumbUrls,
   canEdit,
 }: {
   boardId: string;
   summary: DashboardSummary;
-  signedThumbUrls: Record<string, string>;
   canEdit: boolean;
 }) {
   if (summary.tiles.length === 0) {
@@ -23,12 +21,7 @@ export function DashboardGrid({
   return (
     <div className="grid grid-cols-1 gap-5 sm:grid-cols-2 lg:grid-cols-3">
       {summary.tiles.map((tile) => (
-        <CategoryTile
-          key={tile.id}
-          boardId={boardId}
-          tile={tile}
-          signedThumbUrls={signedThumbUrls}
-        />
+        <CategoryTile key={tile.id} boardId={boardId} tile={tile} />
       ))}
     </div>
   );

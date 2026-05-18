@@ -6,7 +6,6 @@ import {
   loadCanvasPositions,
   loadCategoryDrillDown,
   loadDashboardSummary,
-  signImagePaths,
   UNCATEGORIZED_ID,
 } from "@/lib/board-data";
 import { findCategoryBySlug } from "@/lib/slug";
@@ -90,19 +89,11 @@ export default async function CategoryDrillDownPage({
   // Swim-lane panel: every category except the current one and
   // Uncategorized (Uncategorized is reachable via the panel's "Remove
   // from category" row when the current view is a real category).
+  // The tiles already carry pre-resolved thumbnail URLs from
+  // loadDashboardSummary — same set the dashboard fan-deck uses.
   const panelTiles = dashboardSummary.tiles.filter(
     (t) => t.id !== resolvedCategoryId && t.id !== UNCATEGORIZED_ID,
   );
-  const panelThumbPaths = Array.from(
-    new Set(panelTiles.flatMap((t) => t.thumbnailPaths)),
-  );
-  // Swim-lane drop chips are tiny (~80px CSS each), so a 240px variant
-  // is plenty even at 3x DPR.
-  const panelThumbUrls = await signImagePaths(panelThumbPaths, {
-    width: 240,
-    quality: 70,
-    resize: "cover",
-  });
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-4 py-6 sm:gap-10 sm:px-6 sm:py-10">
@@ -133,8 +124,6 @@ export default async function CategoryDrillDownPage({
           boardId={id}
           categoryId={resolvedCategoryId}
           artifacts={drill.artifacts}
-          signedImageUrls={drill.signedImageUrls}
-          signedZoomUrls={drill.signedZoomUrls}
           membershipsByArtifact={drill.membershipsByArtifact}
           tagsByArtifact={drill.tagsByArtifact}
           allTags={drill.allTags}
@@ -150,8 +139,6 @@ export default async function CategoryDrillDownPage({
           categoryId={resolvedCategoryId}
           categoryName={displayName}
           artifacts={drill.artifacts}
-          signedImageUrls={drill.signedImageUrls}
-          signedZoomUrls={drill.signedZoomUrls}
           membershipsByArtifact={drill.membershipsByArtifact}
           tagsByArtifact={drill.tagsByArtifact}
           allTags={drill.allTags}
@@ -159,7 +146,6 @@ export default async function CategoryDrillDownPage({
           provenanceByArtifact={drill.provenanceByArtifact}
           canEdit={core.canEdit}
           panelTiles={panelTiles}
-          panelThumbUrls={panelThumbUrls}
           showDebug={showDebug}
         />
       )}

@@ -20,7 +20,8 @@
     "dev:seed": "node scripts/dev-seed.mjs",
     "dev:auth": "node scripts/dev-auth.mjs",
     "bulk-import": "tsx scripts/bulk-import.ts",
-    "migrate-to-hosted": "tsx scripts/migrate-to-hosted.ts"
+    "migrate-to-hosted": "tsx scripts/migrate-to-hosted.ts",
+    "backfill-r2": "tsx scripts/backfill-r2.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
@@ -47,10 +48,12 @@
     "@types/react": "^19",
     "@types/react-dom": "^19",
     "@vitejs/plugin-react": "^6.0.1",
+    "aws4fetch": "^1.0.20",
     "dotenv": "^17.4.2",
     "eslint": "^9",
     "eslint-config-next": "16.2.4",
     "jsdom": "^29.0.2",
+    "sharp": "^0.34.5",
     "supabase": "^2.95.3",
     "tailwindcss": "^4",
     "tsx": "^4.20.3",

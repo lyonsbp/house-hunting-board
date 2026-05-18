@@ -60,8 +60,6 @@ export function CanvasView({
   boardId,
   categoryId,
   artifacts,
-  signedImageUrls,
-  signedZoomUrls,
   membershipsByArtifact,
   tagsByArtifact,
   allTags,
@@ -74,8 +72,6 @@ export function CanvasView({
   boardId: string;
   categoryId: string;
   artifacts: Artifact[];
-  signedImageUrls: Record<string, string>;
-  signedZoomUrls: Record<string, string>;
   membershipsByArtifact: Record<string, Membership[]>;
   tagsByArtifact: Record<string, Tag[]>;
   allTags: Tag[];
@@ -200,16 +196,8 @@ export function CanvasView({
                 boardId={boardId}
                 categories={allCategories}
                 memberCategoryIds={memberships.map((m) => m.categoryId)}
-                signedImageUrl={
-                  art.kind === "image"
-                    ? signedImageUrls[art.storagePath]
-                    : undefined
-                }
-                signedZoomUrl={
-                  art.kind === "image"
-                    ? signedZoomUrls[art.storagePath]
-                    : undefined
-                }
+                thumbUrl={art.kind === "image" ? art.thumbUrl : undefined}
+                displayUrl={art.kind === "image" ? art.displayUrl : undefined}
                 tags={tagsByArtifact[art.id] ?? []}
                 allTags={allTags}
                 provenance={provenanceByArtifact[art.id]}
@@ -233,8 +221,8 @@ function DraggableCanvasCard({
   boardId,
   categories,
   memberCategoryIds,
-  signedImageUrl,
-  signedZoomUrl,
+  thumbUrl,
+  displayUrl,
   tags,
   allTags,
   provenance,
@@ -248,8 +236,8 @@ function DraggableCanvasCard({
   boardId: string;
   categories: Category[];
   memberCategoryIds: string[];
-  signedImageUrl?: string;
-  signedZoomUrl?: string;
+  thumbUrl?: string;
+  displayUrl?: string;
   tags: Tag[];
   allTags: Tag[];
   provenance?: ArtifactProvenance;
@@ -312,8 +300,8 @@ function DraggableCanvasCard({
         boardId={boardId}
         categories={categories}
         memberCategoryIds={memberCategoryIds}
-        signedImageUrl={signedImageUrl}
-        signedZoomUrl={signedZoomUrl}
+        thumbUrl={thumbUrl}
+        displayUrl={displayUrl}
         tags={tags}
         allTags={allTags}
         provenance={provenance}

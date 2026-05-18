@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
-import { prepareImageForUpload } from "@/lib/image-prep";
+import { encodeVariants } from "@/lib/image-encode";
 
 import { createImageArtifact } from "./actions";
 
@@ -53,15 +53,20 @@ export function PasteImageListener({ boardId }: { boardId: string }) {
             });
 
       setStatus({ kind: "uploading" });
-      const prepared = await prepareImageForUpload(named).catch(() => null);
+      const encoded = await encodeVariants(named).catch(() => null);
       const fd = new FormData();
       fd.append("boardId", boardId);
-      fd.append("file", prepared?.file ?? named);
-      if (prepared?.width && prepared.height) {
-        fd.append("width", String(prepared.width));
-        fd.append("height", String(prepared.height));
+      fd.append("file", named);
+      if (encoded) {
+        fd.append("width", String(encoded.width));
+        fd.append("height", String(encoded.height));
+        if (encoded.lqip) fd.append("lqip", encoded.lqip);
+        fd.append("contentHash", encoded.contentHash);
+        fd.append("thumb", encoded.thumb.blob, `thumb.${encoded.thumb.ext}`);
+        fd.append("thumbExt", encoded.thumb.ext);
+        fd.append("display", encoded.display.blob, `display.${encoded.display.ext}`);
+        fd.append("displayExt", encoded.display.ext);
       }
-      if (prepared?.lqip) fd.append("lqip", prepared.lqip);
 
       const result = await createImageArtifact({ status: "idle" }, fd);
       if (result.status === "error") {

@@ -5,6 +5,7 @@ import { redirect } from "next/navigation";
 import { z } from "zod";
 
 import { getCurrentUser } from "@/lib/auth";
+import { encodeServerVariants } from "@/lib/image-encode-server";
 import { readImageDimensions } from "@/lib/image-meta";
 import {
   insertSnapshotsFromPreview,
@@ -22,6 +23,13 @@ import {
   type ListingPreview,
   type ListingSource,
 } from "@/lib/listings/types";
+import {
+  type ImageExt,
+  type Variant,
+  buildKey,
+  r2WritesEnabled,
+  storage,
+} from "@/lib/storage";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -437,35 +445,93 @@ async function importOneImage(
     return { ok: false, error: shortError(args.imageUrl, "exceeds 10MB cap") };
   }
 
-  const path = `boards/${args.boardId}/${crypto.randomUUID()}.${ext}`;
-  const { error: uploadError } = await args.supabase.storage
-    .from("artifacts")
-    .upload(path, buf, { contentType: ct, upsert: false });
-  if (uploadError) {
-    return { ok: false, error: shortError(args.imageUrl, uploadError.message) };
-  }
+  const metadataExtras = {
+    source: args.source,
+    source_url: args.sourceUrl,
+    scraped_at: args.scrapedAt,
+    image_source_url: args.imageUrl,
+    image_index: args.imageIndex,
+  };
 
-  const dims = readImageDimensions(buf, ct);
+  let insertPayload: {
+    storage_path: string | null;
+    storage_backend: "supabase" | "r2";
+    content_hash: string | null;
+    metadata: Record<string, unknown>;
+  };
+  let cleanupR2Keys: string[] = [];
+  let cleanupLegacyPath: string | null = null;
+
+  if (r2WritesEnabled()) {
+    let encoded;
+    try {
+      encoded = await encodeServerVariants({ bytes: buf, sourceMime: ct });
+    } catch (e) {
+      return {
+        ok: false,
+        error: shortError(args.imageUrl, e instanceof Error ? e.message : "resize failed"),
+      };
+    }
+    try {
+      const uploaded = await uploadVariantsDedupedScraper({
+        contentHash: encoded.contentHash,
+        thumb: encoded.thumb,
+        display: encoded.display,
+        original: encoded.original,
+      });
+      cleanupR2Keys = uploaded.uploadedKeys;
+      insertPayload = {
+        storage_path: null,
+        storage_backend: "r2",
+        content_hash: encoded.contentHash,
+        metadata: {
+          ...metadataExtras,
+          width: encoded.width,
+          height: encoded.height,
+          variants: uploaded.variants,
+        },
+      };
+    } catch (e) {
+      return {
+        ok: false,
+        error: shortError(args.imageUrl, e instanceof Error ? e.message : "R2 upload failed"),
+      };
+    }
+  } else {
+    const path = `boards/${args.boardId}/${crypto.randomUUID()}.${ext}`;
+    const { error: uploadError } = await args.supabase.storage
+      .from("artifacts")
+      .upload(path, buf, { contentType: ct, upsert: false });
+    if (uploadError) {
+      return { ok: false, error: shortError(args.imageUrl, uploadError.message) };
+    }
+    const dims = readImageDimensions(new Uint8Array(buf), ct);
+    cleanupLegacyPath = path;
+    insertPayload = {
+      storage_path: path,
+      storage_backend: "supabase",
+      content_hash: null,
+      metadata: {
+        ...metadataExtras,
+        ...(dims ? { width: dims.width, height: dims.height } : {}),
+      },
+    };
+  }
 
   const { data: artifactRow, error: artifactError } = await args.supabase
     .from("artifacts")
     .insert({
       board_id: args.boardId,
       kind: "image",
-      storage_path: path,
-      metadata: {
-        source: args.source,
-        source_url: args.sourceUrl,
-        scraped_at: args.scrapedAt,
-        image_source_url: args.imageUrl,
-        image_index: args.imageIndex,
-        ...(dims ? { width: dims.width, height: dims.height } : {}),
-      },
+      storage_path: insertPayload.storage_path,
+      storage_backend: insertPayload.storage_backend,
+      content_hash: insertPayload.content_hash,
+      metadata: insertPayload.metadata,
     })
     .select("id")
     .single();
   if (artifactError || !artifactRow) {
-    await args.supabase.storage.from("artifacts").remove([path]);
+    await rollbackUpload(args.supabase, cleanupLegacyPath, cleanupR2Keys);
     return {
       ok: false,
       error: shortError(args.imageUrl, artifactError?.message ?? "artifact insert failed"),
@@ -476,14 +542,56 @@ async function importOneImage(
     .from("property_artifacts")
     .insert({ property_id: args.propertyId, artifact_id: artifactRow.id });
   if (linkError) {
-    // Roll back the artifact + the storage object on link failure so we
-    // don't leave a half-imported row.
+    // Roll back the artifact + the just-written storage objects.
     await args.supabase.from("artifacts").delete().eq("id", artifactRow.id);
-    await args.supabase.storage.from("artifacts").remove([path]);
+    await rollbackUpload(args.supabase, cleanupLegacyPath, cleanupR2Keys);
     return { ok: false, error: shortError(args.imageUrl, linkError.message) };
   }
 
   return { ok: true };
+}
+
+type VariantInput = { blob: Blob; ext: ImageExt };
+
+async function uploadVariantsDedupedScraper(input: {
+  contentHash: string;
+  thumb: VariantInput;
+  display: VariantInput;
+  original: VariantInput;
+}): Promise<{
+  variants: Record<Variant, { key: string; ext: ImageExt }>;
+  uploadedKeys: string[];
+}> {
+  const uploaded: string[] = [];
+  const put = async (v: Variant, vi: VariantInput) => {
+    if (await storage.has(input.contentHash, v, vi.ext)) {
+      return { key: buildKey(input.contentHash, v, vi.ext), ext: vi.ext };
+    }
+    const ref = await storage.putOne(input.contentHash, v, vi.blob, vi.ext);
+    uploaded.push(ref.key);
+    return ref;
+  };
+  const [thumb, display, original] = await Promise.all([
+    put("thumb", input.thumb),
+    put("display", input.display),
+    put("original", input.original),
+  ]);
+  return { variants: { thumb, display, original }, uploadedKeys: uploaded };
+}
+
+async function rollbackUpload(
+  supabase: ImportOneArgs["supabase"],
+  legacyPath: string | null,
+  r2Keys: string[],
+): Promise<void> {
+  if (legacyPath) {
+    await supabase.storage.from("artifacts").remove([legacyPath]);
+  }
+  if (r2Keys.length > 0) {
+    // Safe to delete on rollback: these keys were just-written by this
+    // call and no other artifact row references them yet.
+    await storage.remove(r2Keys).catch(() => undefined);
+  }
 }
 
 function shortError(url: string, msg: string): string {

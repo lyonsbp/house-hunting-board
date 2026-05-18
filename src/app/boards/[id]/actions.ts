@@ -10,6 +10,13 @@ import { getCurrentUser } from "@/lib/auth";
 import { UNCATEGORIZED_ID } from "@/lib/board-data-shared";
 import { readImageDimensions } from "@/lib/image-meta";
 import { slugify } from "@/lib/slug";
+import {
+  type ImageExt,
+  type Variant,
+  buildKey,
+  r2WritesEnabled,
+  storage,
+} from "@/lib/storage";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { createClient } from "@/lib/supabase/server";
 
@@ -244,6 +251,8 @@ export async function createLinkArtifact(
   return { status: "idle" };
 }
 
+const ImageExtSchema = z.enum(["avif", "webp", "jpg", "jpeg", "png"]);
+
 const ImageSchema = z.object({
   boardId: z.string().uuid(),
   caption: z.string().trim().max(1000).optional(),
@@ -258,6 +267,11 @@ const ImageSchema = z.object({
     .max(4_000)
     .regex(/^data:image\/(jpeg|png|webp);base64,/)
     .optional(),
+  // R2 path only — present when the browser ran encodeVariants() and
+  // packed thumb/display blobs into the FormData.
+  contentHash: z.string().regex(/^[0-9a-f]{64}$/).optional(),
+  thumbExt: ImageExtSchema.optional(),
+  displayExt: ImageExtSchema.optional(),
 });
 
 const ALLOWED_IMAGE_TYPES = new Set([
@@ -316,8 +330,8 @@ export async function createImageArtifact(
     return { status: "error", message: "Image is larger than 10MB." };
   }
 
-  const ext = (file.name.split(".").pop() ?? "bin").toLowerCase();
-  const path = `boards/${parsed.data.boardId}/${crypto.randomUUID()}.${ext}`;
+  const originalExt = mimeToExt(file.type);
+  const legacyPath = `boards/${parsed.data.boardId}/${crypto.randomUUID()}.${originalExt}`;
 
   // Prefer the client-measured dims (zero extra bytes read). Fall back
   // to parsing the file header server-side so non-browser submitters
@@ -341,14 +355,72 @@ export async function createImageArtifact(
   if (parsed.data.lqip) metadata.lqip = parsed.data.lqip;
 
   const supabase = await createClient();
-  const { error: uploadError } = await supabase.storage
-    .from("artifacts")
-    .upload(path, file, {
-      contentType: file.type,
-      upsert: false,
-    });
-  if (uploadError) {
-    return { status: "error", message: uploadError.message };
+
+  // Decide path: R2 if the flag is on AND the client supplied the
+  // variant payload (contentHash + thumb + display blobs). Otherwise
+  // fall back to the legacy single-file Supabase Storage upload so the
+  // app keeps working even when the client is stale or the flag flips.
+  const thumb = formData.get("thumb");
+  const display = formData.get("display");
+  const useR2 =
+    r2WritesEnabled() &&
+    parsed.data.contentHash &&
+    parsed.data.thumbExt &&
+    parsed.data.displayExt &&
+    thumb instanceof Blob &&
+    thumb.size > 0 &&
+    display instanceof Blob &&
+    display.size > 0;
+
+  let insertRow: {
+    storage_path: string | null;
+    storage_backend: "supabase" | "r2";
+    content_hash: string | null;
+    metadata: Record<string, unknown>;
+  };
+  let cleanupR2Keys: string[] = [];
+
+  if (useR2) {
+    const contentHash = parsed.data.contentHash!;
+    const thumbExt = parsed.data.thumbExt!;
+    const displayExt = parsed.data.displayExt!;
+    try {
+      const variants = await uploadVariantsDeduped({
+        contentHash,
+        original: { blob: file, ext: originalExt },
+        thumb: { blob: thumb as Blob, ext: thumbExt },
+        display: { blob: display as Blob, ext: displayExt },
+      });
+      metadata.variants = variants.variants;
+      insertRow = {
+        storage_path: null,
+        storage_backend: "r2",
+        content_hash: contentHash,
+        metadata,
+      };
+      cleanupR2Keys = variants.uploadedKeys;
+    } catch (err) {
+      return {
+        status: "error",
+        message: err instanceof Error ? err.message : "R2 upload failed.",
+      };
+    }
+  } else {
+    const { error: uploadError } = await supabase.storage
+      .from("artifacts")
+      .upload(legacyPath, file, {
+        contentType: file.type,
+        upsert: false,
+      });
+    if (uploadError) {
+      return { status: "error", message: uploadError.message };
+    }
+    insertRow = {
+      storage_path: legacyPath,
+      storage_backend: "supabase",
+      content_hash: null,
+      metadata,
+    };
   }
 
   // Inline-insert here (instead of using insertArtifact) so we can grab
@@ -359,14 +431,24 @@ export async function createImageArtifact(
     .insert({
       board_id: parsed.data.boardId,
       kind: "image",
-      storage_path: path,
+      storage_path: insertRow.storage_path,
+      storage_backend: insertRow.storage_backend,
+      content_hash: insertRow.content_hash,
       body: parsed.data.caption ?? null,
-      metadata,
+      metadata: insertRow.metadata,
     })
     .select("id")
     .single();
   if (insertError || !inserted) {
-    await supabase.storage.from("artifacts").remove([path]);
+    // Best-effort cleanup. For R2 dedupe hits cleanupR2Keys is empty
+    // (we didn't write anything new). For legacy path we drop the
+    // just-uploaded Supabase object so we don't leak storage.
+    if (insertRow.storage_path && insertRow.storage_backend === "supabase") {
+      await supabase.storage.from("artifacts").remove([insertRow.storage_path]);
+    }
+    if (cleanupR2Keys.length > 0) {
+      await storage.remove(cleanupR2Keys).catch(() => undefined);
+    }
     return {
       status: "error",
       message: insertError?.message ?? "Failed to save image.",
@@ -431,18 +513,90 @@ export async function deleteArtifact(formData: FormData) {
   const supabase = await createClient();
   const { data: row } = await supabase
     .from("artifacts")
-    .select("storage_path")
+    .select("storage_path, storage_backend")
     .eq("id", id)
     .maybeSingle();
 
   const { error } = await supabase.from("artifacts").delete().eq("id", id);
   if (error) throw new Error(error.message);
 
-  if (row?.storage_path) {
+  // Legacy Supabase-backed rows: drop the bytes alongside the row.
+  // R2-backed rows: deliberately do NOT delete objects — two artifact
+  // rows can share the same content_hash via the dedupe path, so a
+  // row-level delete cannot safely imply an R2 delete. Unreferenced
+  // R2 objects are reclaimed by a future periodic GC worker that
+  // checks artifact references.
+  if (row?.storage_path && row.storage_backend === "supabase") {
     await supabase.storage.from("artifacts").remove([row.storage_path]);
   }
 
   revalidatePath(`/boards/${boardId}`);
+}
+
+// ---------------------------------------------------------------------------
+// Image upload helpers (R2 variants)
+// ---------------------------------------------------------------------------
+
+function mimeToExt(mime: string): ImageExt {
+  switch (mime) {
+    case "image/jpeg":
+    case "image/jpg":
+      return "jpg";
+    case "image/png":
+      return "png";
+    case "image/webp":
+      return "webp";
+    case "image/avif":
+      return "avif";
+    default:
+      return "jpg";
+  }
+}
+
+type VariantUploadInput = {
+  contentHash: string;
+  original: { blob: Blob; ext: ImageExt };
+  thumb: { blob: Blob; ext: ImageExt };
+  display: { blob: Blob; ext: ImageExt };
+};
+
+type VariantUploadResult = {
+  variants: Record<Variant, { key: string; ext: ImageExt }>;
+  /** Keys actually written by this call (excludes dedupe hits). */
+  uploadedKeys: string[];
+};
+
+/**
+ * Upload thumb/display/original to R2. Deduped per-variant: if a
+ * key already exists (same content_hash, same variant, same ext) we
+ * skip the upload and reuse the existing object. This lets the same
+ * Redfin photo pasted on two boards collapse to one set of R2 objects.
+ */
+async function uploadVariantsDeduped(
+  input: VariantUploadInput,
+): Promise<VariantUploadResult> {
+  const { contentHash } = input;
+  const uploaded: string[] = [];
+
+  const upload = async (v: Variant, blob: Blob, ext: ImageExt) => {
+    if (await storage.has(contentHash, v, ext)) {
+      return { key: buildKey(contentHash, v, ext), ext };
+    }
+    const ref = await storage.putOne(contentHash, v, blob, ext);
+    uploaded.push(ref.key);
+    return ref;
+  };
+
+  const [thumb, display, original] = await Promise.all([
+    upload("thumb", input.thumb.blob, input.thumb.ext),
+    upload("display", input.display.blob, input.display.ext),
+    upload("original", input.original.blob, input.original.ext),
+  ]);
+
+  return {
+    variants: { thumb, display, original },
+    uploadedKeys: uploaded,
+  };
 }
 
 // ---------------------------------------------------------------------------

@@ -62,8 +62,6 @@ export function CategoryView({
   categoryId,
   categoryName,
   artifacts: initialArtifacts,
-  signedImageUrls,
-  signedZoomUrls,
   membershipsByArtifact,
   tagsByArtifact,
   allTags,
@@ -71,7 +69,6 @@ export function CategoryView({
   provenanceByArtifact,
   canEdit,
   panelTiles,
-  panelThumbUrls,
   showDebug = false,
 }: {
   boardId: string;
@@ -79,8 +76,6 @@ export function CategoryView({
   categoryId: string;
   categoryName: string;
   artifacts: Artifact[];
-  signedImageUrls: Record<string, string>;
-  signedZoomUrls: Record<string, string>;
   membershipsByArtifact: Record<string, Membership[]>;
   tagsByArtifact: Record<string, Tag[]>;
   allTags: Tag[];
@@ -92,7 +87,6 @@ export function CategoryView({
    * swim-lane drop panel that appears during a drag.
    */
   panelTiles: SwimlaneTile[];
-  panelThumbUrls: Record<string, string>;
   /** ?debug=1 turns on the on-screen DnD inspector. */
   showDebug?: boolean;
 }) {
@@ -278,7 +272,6 @@ export function CategoryView({
       <SwimlaneDropPanel
         currentCategoryId={categoryId}
         otherTiles={panelTiles}
-        signedThumbUrls={panelThumbUrls}
         dragInProgress={activeId !== null}
         canEdit={canEdit}
       />
@@ -297,16 +290,8 @@ export function CategoryView({
                 boardId={boardId}
                 categories={allCategories}
                 memberCategoryIds={memberships.map((m) => m.categoryId)}
-                signedImageUrl={
-                  art.kind === "image"
-                    ? signedImageUrls[art.storagePath]
-                    : undefined
-                }
-                signedZoomUrl={
-                  art.kind === "image"
-                    ? signedZoomUrls[art.storagePath]
-                    : undefined
-                }
+                thumbUrl={art.kind === "image" ? art.thumbUrl : undefined}
+                displayUrl={art.kind === "image" ? art.displayUrl : undefined}
                 tags={tagsByArtifact[art.id] ?? []}
                 allTags={allTags}
                 provenance={provenanceByArtifact[art.id]}
@@ -335,14 +320,14 @@ export function CategoryView({
               memberCategoryIds={(
                 membershipsByArtifact[activeArtifact.id] ?? []
               ).map((m) => m.categoryId)}
-              signedImageUrl={
+              thumbUrl={
                 activeArtifact.kind === "image"
-                  ? signedImageUrls[activeArtifact.storagePath]
+                  ? activeArtifact.thumbUrl
                   : undefined
               }
-              signedZoomUrl={
+              displayUrl={
                 activeArtifact.kind === "image"
-                  ? signedZoomUrls[activeArtifact.storagePath]
+                  ? activeArtifact.displayUrl
                   : undefined
               }
               tags={tagsByArtifact[activeArtifact.id] ?? []}
@@ -378,8 +363,8 @@ function SortableCard({
   artifact,
   boardId,
   categories,
-  signedImageUrl,
-  signedZoomUrl,
+  thumbUrl,
+  displayUrl,
   tags,
   memberCategoryIds,
   allTags,
@@ -391,8 +376,8 @@ function SortableCard({
   artifact: Artifact;
   boardId: string;
   categories: Category[];
-  signedImageUrl?: string;
-  signedZoomUrl?: string;
+  thumbUrl?: string;
+  displayUrl?: string;
   tags: Tag[];
   memberCategoryIds: string[];
   allTags: Tag[];
@@ -428,8 +413,8 @@ function SortableCard({
         boardId={boardId}
         categories={categories}
         memberCategoryIds={memberCategoryIds}
-        signedImageUrl={signedImageUrl}
-        signedZoomUrl={signedZoomUrl}
+        thumbUrl={thumbUrl}
+        displayUrl={displayUrl}
         tags={tags}
         allTags={allTags}
         provenance={provenance}
