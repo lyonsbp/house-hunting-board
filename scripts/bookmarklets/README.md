@@ -1,23 +1,35 @@
 # Favorites URL extractors
 
-Two devtools snippets that scrape your Redfin / Zillow favorites pages
-into a newline-separated URL list, ready to feed to
-`pnpm bulk-import urls.txt`. Neither site exposes favorites via API and
-both require you to be logged in, so this runs in your own browser.
+`pnpm bulk-import` accepts either a plain newline-separated `.txt` of
+URLs *or* a Redfin favorites `.csv` export (it auto-detects by file
+extension). For Redfin the CSV path is by far the easier route; the
+bookmarklet is still here as a fallback. Zillow has no CSV export, so
+the bookmarklet is the only option there.
 
-## Redfin
+## Redfin (preferred: CSV export)
 
 1. Sign in at [redfin.com](https://www.redfin.com/) (or your shared
    partner-account session).
 2. Navigate to **My Home Tour** / favorites — usually
    `https://www.redfin.com/myredfin`.
-3. Open DevTools → Console.
-4. Paste the entire contents of [`redfin-favorites.js`](./redfin-favorites.js)
+3. Click the **Download (.csv)** link at the top of the favorites table.
+4. Save the file under `scripts/` (or anywhere — pass the path to
+   `pnpm bulk-import`).
+5. Run `pnpm bulk-import scripts/redfin-favorites_<date>.csv`. The
+   script reads the `URL (...)` column and ignores the rest.
+
+## Redfin (fallback: bookmarklet)
+
+If the CSV export isn't available for some reason (different account
+type, etc.):
+
+1. Sign in and navigate to the favorites page.
+2. Open DevTools → Console.
+3. Paste the entire contents of [`redfin-favorites.js`](./redfin-favorites.js)
    and press Enter.
-5. The snippet scrolls the page to trigger lazy-loaded rows, dedupes, and
-   copies the URLs to your clipboard. The console prints the count and
-   the list.
-6. Paste into `urls.txt`.
+4. The snippet scrolls the page to trigger lazy-loaded rows, dedupes, and
+   copies the URLs to your clipboard. The console prints the count.
+5. Paste into a `urls.txt` and feed it to `pnpm bulk-import urls.txt`.
 
 ## Zillow
 

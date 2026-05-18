@@ -20,8 +20,11 @@
 import { readFileSync } from "node:fs";
 import { argv, exit } from "node:process";
 
-// tsx autoloads `.env.local` from CWD before user code runs, so by the
-// time the modules below read process.env the keys are already there.
+import { config as loadEnv } from "dotenv";
+
+// Next dev autoloads `.env.local`; tsx does not, so load it explicitly
+// before importing modules that read process.env at module scope.
+loadEnv({ path: ".env.local" });
 
 import { runExtraction } from "@/lib/listings/feature-extract";
 import {
@@ -72,10 +75,78 @@ function parseArgs(): Args {
 
 function readUrls(path: string): string[] {
   const raw = readFileSync(path, "utf8");
+  if (path.toLowerCase().endsWith(".csv")) {
+    return readUrlsFromCsv(raw);
+  }
   return raw
     .split("\n")
     .map((l) => l.trim())
     .filter((l) => l.length > 0 && !l.startsWith("#"));
+}
+
+/**
+ * Parse a Redfin (or compatible) favorites CSV export. Picks the column
+ * whose header starts with "URL" — Redfin's actual column name is
+ *   "URL (SEE https://... FOR INFO ON PRICING)"
+ * but the leading "URL" prefix is stable.
+ */
+function readUrlsFromCsv(raw: string): string[] {
+  const rows = parseCsv(raw);
+  if (rows.length < 2) return [];
+  const header = rows[0]!;
+  const urlIdx = header.findIndex((h) => h.trim().toUpperCase().startsWith("URL"));
+  if (urlIdx < 0) {
+    throw new Error("CSV has no column starting with 'URL'.");
+  }
+  const out: string[] = [];
+  for (let i = 1; i < rows.length; i++) {
+    const cell = rows[i]?.[urlIdx]?.trim() ?? "";
+    if (cell && /^https?:\/\//i.test(cell)) out.push(cell);
+  }
+  return out;
+}
+
+/** Minimal RFC-4180-ish CSV parser: handles quoted fields, escaped quotes (""), commas/newlines in fields. No external deps. */
+function parseCsv(raw: string): string[][] {
+  const rows: string[][] = [];
+  let row: string[] = [];
+  let field = "";
+  let inQuotes = false;
+  for (let i = 0; i < raw.length; i++) {
+    const c = raw[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (raw[i + 1] === '"') {
+          field += '"';
+          i++;
+        } else {
+          inQuotes = false;
+        }
+      } else {
+        field += c;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inQuotes = true;
+    } else if (c === ",") {
+      row.push(field);
+      field = "";
+    } else if (c === "\n" || c === "\r") {
+      if (c === "\r" && raw[i + 1] === "\n") i++;
+      row.push(field);
+      rows.push(row);
+      row = [];
+      field = "";
+    } else {
+      field += c;
+    }
+  }
+  if (field.length > 0 || row.length > 0) {
+    row.push(field);
+    rows.push(row);
+  }
+  return rows;
 }
 
 function sleep(ms: number): Promise<void> {
