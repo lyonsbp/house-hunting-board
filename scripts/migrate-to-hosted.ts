@@ -66,21 +66,24 @@ function mkClient(url: string, key: string): SupabaseClient {
 async function fetchAll<T>(
   client: SupabaseClient,
   table: string,
-  orderCol = "id",
+  opts: { columns?: string; orderCol?: string; pageSize?: number } = {},
 ): Promise<T[]> {
+  const columns = opts.columns ?? "*";
+  const orderCol = opts.orderCol ?? "id";
+  const pageSize = opts.pageSize ?? READ_PAGE;
   const out: T[] = [];
   let from = 0;
   for (;;) {
     const { data, error } = await client
       .from(table)
-      .select("*")
+      .select(columns)
       .order(orderCol, { ascending: true })
-      .range(from, from + READ_PAGE - 1);
+      .range(from, from + pageSize - 1);
     if (error) throw new Error(`Read ${table} failed: ${error.message}`);
     if (!data || data.length === 0) break;
-    out.push(...(data as T[]));
-    if (data.length < READ_PAGE) break;
-    from += READ_PAGE;
+    out.push(...(data as unknown as T[]));
+    if (data.length < pageSize) break;
+    from += pageSize;
   }
   return out;
 }
@@ -121,9 +124,12 @@ async function buildPropertyIdMap(
   source: SupabaseClient,
   dest: SupabaseClient,
 ): Promise<Map<string, string>> {
+  // Strict column list: `properties.raw` is 600KB+ per row and SELECT *
+  // would push the dest read past the hosted 8s statement timeout.
+  const cols = "id,source,source_url";
   const [local, hosted] = await Promise.all([
-    fetchAll<PropRow>(source, "properties"),
-    fetchAll<PropRow>(dest, "properties"),
+    fetchAll<PropRow>(source, "properties", { columns: cols }),
+    fetchAll<PropRow>(dest, "properties", { columns: cols }),
   ]);
   const hostedByKey = new Map<string, string>();
   for (const h of hosted) {
