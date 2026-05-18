@@ -4,7 +4,6 @@ import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
 import { z } from "zod";
 
-import { extractFeatures } from "@/lib/ai/feature-extractor";
 import {
   buildCohortTable,
   type AnalyticsProperty,
@@ -12,7 +11,7 @@ import {
   type CohortRow,
 } from "@/lib/analytics/cohort";
 import { getCurrentUser } from "@/lib/auth";
-import { createAdminClient } from "@/lib/supabase/admin";
+import { runExtraction as runExtractionCore } from "@/lib/listings/feature-extract";
 import { createClient } from "@/lib/supabase/server";
 
 /**
@@ -57,60 +56,20 @@ export async function extractFeaturesForProperty(
  * Internal: run the extractor without the auth check. Called by
  * commitListingImport right after a property upsert (we already
  * authorized the user there) and by `extractFeaturesForProperty`.
+ *
+ * Delegates to `runExtractionCore` in `@/lib/listings/feature-extract`
+ * (a plain TS module usable from non-Next contexts like the
+ * `bulk-import` CLI). The Next-specific `revalidatePath` lives here.
  */
 export async function runExtraction(
   propertyId: string,
   revalidateBoardId?: string | null,
 ): Promise<{ ok: true; written: number } | { error: string }> {
-  const admin = createAdminClient();
-
-  const { data: property, error: pErr } = await admin
-    .from("properties")
-    .select("address, city, state, raw")
-    .eq("id", propertyId)
-    .maybeSingle();
-  if (pErr) return { error: pErr.message };
-  if (!property) return { error: "Property not found." };
-
-  let features;
-  try {
-    features = await extractFeatures({
-      address: property.address,
-      city: property.city,
-      state: property.state,
-      raw: property.raw,
-    });
-  } catch (e) {
-    return {
-      error: e instanceof Error ? e.message : "Feature extraction failed.",
-    };
-  }
-
-  // Replace any prior LLM-extracted rows. Manual rows ('manual', or other
-  // sources we add later) are left alone so a human curation isn't blown
-  // away by re-extracting.
-  await admin
-    .from("feature_signals")
-    .delete()
-    .eq("property_id", propertyId)
-    .eq("source", "llm-extract");
-
-  if (features.length > 0) {
-    const { error: insertErr } = await admin.from("feature_signals").insert(
-      features.map((f) => ({
-        property_id: propertyId,
-        feature: f.feature,
-        source: "llm-extract",
-        confidence: f.confidence,
-      })),
-    );
-    if (insertErr) return { error: insertErr.message };
-  }
-
-  if (revalidateBoardId) {
+  const result = await runExtractionCore(propertyId);
+  if (revalidateBoardId && "ok" in result && result.ok) {
     revalidatePath(`/boards/${revalidateBoardId}`);
   }
-  return { ok: true, written: features.length };
+  return result;
 }
 
 // ---------------------------------------------------------------------------

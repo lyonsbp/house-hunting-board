@@ -7,6 +7,10 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { readImageDimensions } from "@/lib/image-meta";
 import {
+  insertSnapshotsFromPreview,
+  upsertPropertyFromPreview,
+} from "@/lib/listings/bulk";
+import {
   getDailyScrapeLimit,
   isSuperadminEmail,
   startOfTodayUtc,
@@ -255,72 +259,21 @@ export async function commitListingImportCore(input: {
     };
   }
 
-  // Upsert property via service role — `properties` has no insert policy.
+  // Upsert property + snapshots via service role — `properties` has no
+  // insert policy. Both helpers live in `@/lib/listings/bulk` so the
+  // bulk-import CLI script shares the same write path.
   const admin = createAdminClient();
-  const { data: propertyRow, error: propertyError } = await admin
-    .from("properties")
-    .upsert(
-      {
-        source: propertySource,
-        source_url: cachedPreview.property.sourceUrl,
-        source_id: cachedPreview.property.sourceId ?? null,
-        address: cachedPreview.property.address ?? null,
-        city: cachedPreview.property.city ?? null,
-        state: cachedPreview.property.state ?? null,
-        zip: cachedPreview.property.zip ?? null,
-        list_price: cachedPreview.property.listPrice ?? null,
-        sold_price: cachedPreview.property.soldPrice ?? null,
-        bedrooms: cachedPreview.property.bedrooms ?? null,
-        bathrooms: cachedPreview.property.bathrooms ?? null,
-        sqft: cachedPreview.property.sqft ?? null,
-        lot_sqft: cachedPreview.property.lotSqft ?? null,
-        year_built: cachedPreview.property.yearBuilt ?? null,
-        status: cachedPreview.property.status ?? null,
-        raw: cachedPreview.property.raw ?? {},
-        scraped_at: cachedPreview.scrapedAt,
-      },
-      { onConflict: "source,source_url" },
-    )
-    .select("id")
-    .single();
-  if (propertyError || !propertyRow) {
-    return {
-      status: "error",
-      message: propertyError?.message ?? "Failed to save listing record.",
-    };
+  const upserted = await upsertPropertyFromPreview(admin, cachedPreview);
+  if ("error" in upserted) {
+    return { status: "error", message: upserted.error };
   }
-  const propertyId = propertyRow.id as string;
+  const propertyId = upserted.id;
 
   // Snapshot the values we just upserted so future refreshes have a
-  // baseline to compute deltas against. Failure here is non-fatal — we
-  // can still complete the import, the next refresh just won't see a
-  // history entry.
-  await admin.from("property_snapshots").insert({
-    property_id: propertyId,
-    list_price: cachedPreview.property.listPrice ?? null,
-    sold_price: cachedPreview.property.soldPrice ?? null,
-    status: cachedPreview.property.status ?? null,
-    scraped_at: cachedPreview.scrapedAt,
-    source: "scrape",
-  });
-
-  // Plus every event in the listing's own price history if the parser
-  // extracted any. These are dated by the source (e.g. "$1.4M on Jan 15"),
-  // not by when we scraped, so they give us a real trajectory on day 1
-  // instead of having to wait for refreshes to accumulate one.
-  const history = cachedPreview.property.priceHistory ?? [];
-  if (history.length > 0) {
-    await admin.from("property_snapshots").insert(
-      history.map((h) => ({
-        property_id: propertyId,
-        list_price: h.listPrice ?? null,
-        sold_price: h.soldPrice ?? null,
-        status: h.status ?? h.event,
-        scraped_at: h.date,
-        source: "listing",
-      })),
-    );
-  }
+  // baseline to compute deltas against, plus every event in the listing's
+  // own price history if the parser extracted any. Failures here are
+  // non-fatal — the property + artifacts still land.
+  await insertSnapshotsFromPreview(admin, propertyId, cachedPreview);
 
   // Bounded-parallel image download + upload. Each entry retains its
   // position in the original selection so the saved `image_index` metadata
