@@ -12,6 +12,11 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Opt JS-based actions onto Node 24 now, ahead of the June 2026 forced switch.
+# Drops the "Node.js 20 actions are deprecated" warning on every run.
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
 jobs:
   verify:
     runs-on: ubuntu-latest
@@ -106,3 +111,5 @@ jobs:
             playwright-report/
             test-results/
           retention-days: 7
+          # Successful runs may not produce a report or trace; don't warn then.
+          if-no-files-found: ignore
