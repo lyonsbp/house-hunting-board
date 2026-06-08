@@ -6,7 +6,10 @@ export class RedfinFetcher implements ListingFetcher {
   readonly source = "redfin" as const;
 
   matches(url: URL): boolean {
-    return /(^|\.)redfin\.com$/i.test(url.hostname);
+    // `redf.in` is Redfin's own URL shortener (e.g. share/SMS links); it
+    // 30x-redirects to the canonical `redfin.com` page, which `fetchListingHtml`
+    // follows so the parser still sees full listing HTML.
+    return /(^|\.)(redfin\.com|redf\.in)$/i.test(url.hostname);
   }
 
   async fetchAndParse(url: string): Promise<ListingPreview> {

@@ -22,11 +22,11 @@ const imageInitialState: CreateImageArtifactState = { status: "idle" };
 type CategoryOption = { id: string; name: string };
 
 const KINDS = [
+  { id: "listing", label: "Listing" },
   { id: "note", label: "Note" },
   { id: "text", label: "Passage" },
   { id: "link", label: "Link" },
   { id: "image", label: "Image" },
-  { id: "listing", label: "Listing" },
 ] as const;
 type KindId = (typeof KINDS)[number]["id"];
 
@@ -40,7 +40,7 @@ export function AddArtifact({
   boardId: string;
   categories: CategoryOption[];
 }) {
-  const [active, setActive] = useState<KindId>("note");
+  const [active, setActive] = useState<KindId>("listing");
 
   return (
     <div className="space-y-4">

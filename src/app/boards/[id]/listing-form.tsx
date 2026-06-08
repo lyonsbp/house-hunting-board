@@ -65,7 +65,7 @@ function ListingFormBody({
       <input
         name="url"
         type="url"
-        placeholder="https://www.redfin.com/… or https://www.zillow.com/…"
+        placeholder="https://www.redfin.com/…, https://redf.in/… or https://www.zillow.com/…"
         required
         className={inputCls}
       />
@@ -73,8 +73,8 @@ function ListingFormBody({
         <p className="text-sm text-red-700">{previewState.message}</p>
       )}
       <p className="text-[11px] text-stone-500">
-        Paste a Redfin or Zillow listing URL. We&apos;ll show the photos so you
-        can pick which to keep.
+        Paste a Redfin (including redf.in share links) or Zillow listing URL.
+        We&apos;ll show the photos so you can pick which to keep.
       </p>
       <div>
         <Button type="submit" variant="primary" isDisabled={previewPending}>

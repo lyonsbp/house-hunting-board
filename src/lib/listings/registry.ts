@@ -17,4 +17,8 @@ export function getFetcher(rawUrl: string): ListingFetcher {
   throw new UnsupportedListingError(parsed.hostname);
 }
 
-export const SUPPORTED_HOST_HINTS = ["redfin.com", "zillow.com"] as const;
+export const SUPPORTED_HOST_HINTS = [
+  "redfin.com",
+  "redf.in",
+  "zillow.com",
+] as const;

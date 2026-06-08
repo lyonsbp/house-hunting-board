@@ -14,6 +14,14 @@ describe("getFetcher", () => {
     expect(getFetcher("https://redfin.com/foo").source).toBe("redfin");
   });
 
+  it("matches redf.in short links", () => {
+    expect(getFetcher("https://redf.in/aBcDeF").source).toBe("redfin");
+  });
+
+  it("matches www.redf.in short links", () => {
+    expect(getFetcher("https://www.redf.in/aBcDeF").source).toBe("redfin");
+  });
+
   it("matches www.zillow.com", () => {
     expect(getFetcher("https://www.zillow.com/homedetails/x/1_zpid/").source).toBe(
       "zillow",
